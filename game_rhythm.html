@@ -1,0 +1,816 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Svihej — Beat Jump</title>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+    background: #04000c;
+    color: #e0d8f0;
+    font-family: system-ui, sans-serif;
+    height: 100vh;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+}
+canvas#gc {
+    position: fixed;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+}
+video { display: none; }
+
+/* HUD overlays — all on top of canvas */
+#hud {
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    display: flex;
+    flex-direction: column;
+}
+#topBar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 24px 0;
+    pointer-events: none;
+}
+#scoreBlock {
+    text-align: right;
+}
+#scoreVal {
+    font-size: 52px;
+    font-weight: 900;
+    color: #fff;
+    line-height: 1;
+    font-variant-numeric: tabular-nums;
+    text-shadow: 0 0 20px rgba(180,80,255,0.8);
+}
+#comboVal {
+    font-size: 18px;
+    font-weight: 700;
+    color: #bf80ff;
+    text-align: right;
+    min-height: 24px;
+}
+#bpmBlock {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    pointer-events: all;
+}
+#bpmLabel { font-size: 11px; color: #7050a0; text-transform: uppercase; letter-spacing: 0.1em; }
+#bpmSelect {
+    background: rgba(40,0,70,0.7);
+    border: 1px solid rgba(130,0,220,0.4);
+    color: #d0b0ff;
+    padding: 6px 12px;
+    border-radius: 8px;
+    font-size: 15px;
+    font-weight: 700;
+    cursor: pointer;
+}
+
+#feedback {
+    position: fixed;
+    left: 50%;
+    top: 38%;
+    transform: translate(-50%, -50%);
+    font-size: 54px;
+    font-weight: 900;
+    letter-spacing: 0.04em;
+    pointer-events: none;
+    opacity: 0;
+    transition: none;
+    text-shadow: 0 0 30px currentColor;
+    text-align: center;
+}
+#feedback.perfekt { color: #44ffaa; }
+#feedback.dobre   { color: #ffdd44; }
+#feedback.miss    { color: #ff4455; }
+
+/* Bottom controls */
+#bottomArea {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding-bottom: 28px;
+    gap: 20px;
+    pointer-events: none;
+}
+
+/* Beat bar */
+#beatBar {
+    display: flex;
+    align-items: center;
+    gap: 28px;
+    pointer-events: none;
+}
+.beat-dot {
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: rgba(120,0,200,0.35);
+    border: 2px solid rgba(130,0,220,0.4);
+    transition: none;
+}
+.beat-dot.active {
+    background: rgba(220,80,255,0.9);
+    border-color: #fff;
+    box-shadow: 0 0 18px rgba(220,80,255,0.9);
+}
+
+/* Timing rail */
+#railWrap {
+    position: relative;
+    width: min(460px, 90vw);
+    height: 36px;
+    pointer-events: none;
+}
+#rail {
+    position: absolute;
+    top: 50%;
+    left: 0; right: 0;
+    height: 3px;
+    background: rgba(100,0,160,0.4);
+    transform: translateY(-50%);
+    border-radius: 2px;
+}
+#railTarget {
+    position: absolute;
+    top: 50%;
+    right: 0;
+    width: 22px;
+    height: 22px;
+    border: 3px solid rgba(200,80,255,0.8);
+    border-radius: 50%;
+    transform: translateY(-50%);
+    box-shadow: 0 0 14px rgba(200,80,255,0.5);
+}
+#railMarker {
+    position: absolute;
+    top: 50%;
+    width: 14px;
+    height: 14px;
+    background: #fff;
+    border-radius: 50%;
+    transform: translate(-50%, -50%);
+    box-shadow: 0 0 10px rgba(255,255,255,0.9);
+    left: 0%;
+}
+
+/* Start/Stop button */
+#startBtn {
+    pointer-events: all;
+    background: linear-gradient(135deg, #6600cc, #aa00ff);
+    border: none;
+    color: #fff;
+    font-size: 18px;
+    font-weight: 800;
+    padding: 14px 48px;
+    border-radius: 50px;
+    cursor: pointer;
+    letter-spacing: 0.05em;
+    box-shadow: 0 4px 30px rgba(150,0,255,0.45);
+}
+#startBtn:hover { background: linear-gradient(135deg, #7a00ee, #cc00ff); }
+#startBtn.running {
+    background: linear-gradient(135deg, #cc0044, #ff0066);
+    box-shadow: 0 4px 30px rgba(255,0,80,0.45);
+}
+
+#countdown {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 140px;
+    font-weight: 900;
+    color: #fff;
+    text-shadow: 0 0 60px rgba(200,80,255,0.9);
+    pointer-events: none;
+    opacity: 0;
+}
+#modelStatus {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%,-50%);
+    font-size: 16px;
+    color: #9070b0;
+    pointer-events: none;
+}
+</style>
+</head>
+<body>
+
+<canvas id="gc"></canvas>
+<video id="vid" autoplay playsinline muted></video>
+
+<div id="hud">
+    <div id="topBar">
+        <div id="bpmBlock">
+            <div id="bpmLabel">BPM</div>
+            <select id="bpmSelect">
+                <option value="120">120</option>
+                <option value="140" selected>140</option>
+                <option value="160">160</option>
+                <option value="180">180</option>
+            </select>
+        </div>
+        <div id="scoreBlock">
+            <div id="scoreVal">0</div>
+            <div id="comboVal"></div>
+        </div>
+    </div>
+</div>
+
+<div id="feedback"></div>
+<div id="countdown"></div>
+<div id="modelStatus">Načítám model…</div>
+
+<div id="bottomArea">
+    <div id="beatBar">
+        <div class="beat-dot" id="bd0"></div>
+        <div class="beat-dot" id="bd1"></div>
+        <div class="beat-dot" id="bd2"></div>
+        <div class="beat-dot" id="bd3"></div>
+    </div>
+    <div id="railWrap">
+        <div id="rail"></div>
+        <div id="railTarget"></div>
+        <div id="railMarker"></div>
+    </div>
+    <button id="startBtn">START</button>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-core@4.9.0/dist/tf-core.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-converter@4.9.0/dist/tf-converter.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-webgl@4.9.0/dist/tf-backend-webgl.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/pose-detection@2.1.0/dist/pose-detection.min.js"></script>
+
+<script>
+// ── MoveNet keypoint indices ───────────────────────────────────────────
+const KP = {
+    leftShoulder:5, rightShoulder:6, leftHip:11, rightHip:12,
+    leftKnee:13, rightKnee:14, leftAnkle:15, rightAnkle:16,
+};
+const SKEL = [
+    [5,6],[5,7],[6,8],[7,9],[8,10],[5,11],[6,12],[11,12],
+    [11,13],[12,14],[13,15],[14,16],
+];
+
+// ── JumpDetector (live thresholds — copied from debug.html) ────────────
+class JumpDetector {
+    TIME_MIN  = 100;
+    TIME_MAX  = 650;
+    MIN_SCORE = 0.25;
+    h = [];
+    d = [];
+    hipUpDrvInt   = 0;
+    hipDownDrvInt = 0;
+    KhipdiffTopLimitSet = false;
+    dbg = { KhipDrv:0, Khipdiff:0, timeUp:0, timeDown:0, ratio:0, reject:'', hipy:0, dhipyAvg:0 };
+
+    _sum(arr, key, n) {
+        const len = Math.min(arr.length, n);
+        let s = 0;
+        for (let i = 0; i < len; i++) s += arr[i][key];
+        return s;
+    }
+
+    reset() {
+        this.h = []; this.d = [];
+        this.hipUpDrvInt = 0; this.hipDownDrvInt = 0;
+        this.KhipdiffTopLimitSet = false;
+    }
+
+    detect(keypoints) {
+        const lh = keypoints[KP.leftHip],      rh = keypoints[KP.rightHip];
+        const ls = keypoints[KP.leftShoulder],  rs = keypoints[KP.rightShoulder];
+        const la = keypoints[KP.leftAnkle],     ra = keypoints[KP.rightAnkle];
+        const lk = keypoints[KP.leftKnee],      rk = keypoints[KP.rightKnee];
+
+        const minScore = Math.min(lh.score, rh.score, ls.score, rs.score);
+        if (minScore < this.MIN_SCORE) return false;
+
+        const p = 5;
+        const m = Math.max(ra.y, la.y) - (ls.y + rs.y) / 2;
+
+        const dL = lh.y - lk.y, dR = rh.y - rk.y;
+        if (dL > 0 && dR > 0 && Math.max(dL/Math.max(dR,1e-9), dR/Math.max(dL,1e-9)) > 1.1)
+            this.KhipdiffTopLimitSet = 2.2;
+
+        this.h.unshift({
+            hipy:0, dhipy:0, dhipyavg:0,
+            hiply:lh.y, hipry:rh.y, shly:ls.y, shry:rs.y,
+            knly:lk.y, knry:rk.y, anly:la.y, anry:ra.y,
+            time: Date.now(),
+        });
+        this.h[0].hipy     = (lh.y + rh.y + ls.y + rs.y) / 4;
+        this.h[0].dhipy    = this.h[1] ? this.h[0].hipy - this.h[1].hipy : 0;
+        this.h[0].dhipyavg = this._sum(this.h, 'dhipy', p) / p;
+        if (this.h.length >= 60) this.h.pop();
+
+        for (const e of this.d) e.frame++;
+
+        const cur  = this.h[0].dhipyavg;
+        const prev = this.h[1] ? this.h[1].dhipyavg : 0;
+        let jumped = false;
+
+        this.dbg.hipy     = +this.h[0].hipy.toFixed(3);
+        this.dbg.dhipyAvg = +cur.toFixed(4);
+        this.dbg.reject   = '';
+
+        if (Math.sign(cur) < Math.sign(prev)) {
+            if (this.d[0]) {
+                let pv=0, pf=0; this.hipDownDrvInt=0;
+                for (let e=1; e<=this.d[0].frame; e++) {
+                    if (this.h[e]) {
+                        if (this.h[e].dhipyavg > pv) { pv=this.h[e].dhipyavg; pf=e; }
+                        this.hipDownDrvInt += this.h[e].dhipyavg;
+                    }
+                }
+                this.d.unshift({type:3, frame:pf, value:pv});
+            }
+            this.d.unshift({type:0, frame:0, time:Date.now()});
+
+            let tUp=0, tDown=0;
+            if (this.d[4]) { tUp=this.d[2].time-this.d[4].time; tDown=this.d[0].time-this.d[2].time; }
+            const Kr   = tUp / Math.max(tDown, 1);
+            const tOk  = (tUp+tDown) > 2*this.TIME_MIN;
+            const tLim = (tUp+tDown) < 2*this.TIME_MAX;
+            const Kd   = Math.abs(this.hipDownDrvInt / (this.hipUpDrvInt||1));
+            const Klim = this.KhipdiffTopLimitSet || 2.5;
+            const Kdrv = (this.hipDownDrvInt-this.hipUpDrvInt) / ((tUp+tDown||1)*30*Math.max(m,1e-6)) * 1e7;
+
+            this.dbg.KhipDrv  = +Kdrv.toFixed(1);
+            this.dbg.Khipdiff = +Kd.toFixed(3);
+            this.dbg.timeUp   = tUp;
+            this.dbg.timeDown = tDown;
+            this.dbg.ratio    = +Kr.toFixed(2);
+
+            if (10<Kdrv && Kdrv<500 && tOk && tLim && 0.15<Kd && Kd<Klim && 0.35<Kr && Kr<2.0) {
+                this.KhipdiffTopLimitSet = false;
+                let abort=false, reason='';
+                const legL=(lk.y-lh.y)/Math.max(la.y-lh.y,0.001)*m*1e3;
+                const legR=(rk.y-rh.y)/Math.max(ra.y-rh.y,0.001)*m*1e3;
+                if (legL<10||legR<10)   { abort=true; reason=`legs`; }
+                if (!abort && (lh.y>lk.y||lh.y>la.y||rh.y>rk.y||rh.y>ra.y)) { abort=true; reason='leg_above_hip'; }
+                if (!abort && (lh.y-ls.y>0.30||rh.y-rs.y>0.30)) { abort=true; reason='body_big'; }
+                if (!abort && (lh.y-ls.y<0.03||rh.y-rs.y<0.03)) { abort=true; reason='body_small'; }
+                if (!abort) { jumped=true; }
+                else { this.dbg.reject = reason; }
+            } else {
+                if      (!(10<Kdrv&&Kdrv<500))   this.dbg.reject=`KDrv`;
+                else if (!tOk)                    this.dbg.reject=`tShort`;
+                else if (!tLim)                   this.dbg.reject=`tLong`;
+                else if (!(0.15<Kd&&Kd<Klim))    this.dbg.reject=`Kdiff`;
+                else                              this.dbg.reject=`Kratio`;
+            }
+        }
+
+        if (Math.sign(cur) > Math.sign(prev)) {
+            if (this.d[0]) {
+                let pv=0, pf=0; this.hipUpDrvInt=0;
+                for (let e=1; e<=this.d[0].frame; e++) {
+                    if (this.h[e]) {
+                        if (this.h[e].dhipyavg < pv) { pv=this.h[e].dhipyavg; pf=e; }
+                        this.hipUpDrvInt += this.h[e].dhipyavg;
+                    }
+                }
+                this.d.unshift({type:1, frame:pf, value:pv});
+            }
+            this.d.unshift({type:2, frame:0, time:Date.now()});
+        }
+        if (8 < this.d.length) this.d.pop();
+
+        return jumped;
+    }
+}
+
+// ── BeatEngine ────────────────────────────────────────────────────────
+class BeatEngine {
+    constructor(bpm, onBeat) {
+        this.bpm = bpm;
+        this.onBeat = onBeat;
+        this.audioCtx = null;
+        this.interval = 60 / bpm;  // seconds per beat
+        this.nextBeatTime = 0;
+        this.beatIndex = 0;
+        this._timerId = null;
+        this.running = false;
+    }
+
+    start() {
+        this.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        this.interval = 60 / this.bpm;
+        this.nextBeatTime = this.audioCtx.currentTime + 0.05;
+        this.beatIndex = 0;
+        this.running = true;
+        this._schedule();
+    }
+
+    stop() {
+        this.running = false;
+        clearTimeout(this._timerId);
+        if (this.audioCtx) { this.audioCtx.close(); this.audioCtx = null; }
+    }
+
+    _schedule() {
+        if (!this.running) return;
+        const lookahead = 0.1;  // seconds ahead to schedule
+        while (this.nextBeatTime < this.audioCtx.currentTime + lookahead) {
+            this._playBeat(this.nextBeatTime, this.beatIndex);
+            // Convert audioCtx time to performance.now ms for jump timing
+            const perfMs = performance.now() + (this.nextBeatTime - this.audioCtx.currentTime) * 1000;
+            this.onBeat(this.beatIndex, perfMs);
+            this.nextBeatTime += this.interval;
+            this.beatIndex++;
+        }
+        this._timerId = setTimeout(() => this._schedule(), 20);
+    }
+
+    _playBeat(when, index) {
+        const ctx = this.audioCtx;
+        const barPos = index % 4;
+
+        // Hi-hat on every beat
+        this._hihat(when, barPos === 0 ? 0.55 : 0.3);
+
+        // Kick on beats 0 and 2 of bar
+        if (barPos === 0 || barPos === 2) {
+            this._kick(when);
+        }
+    }
+
+    _kick(when) {
+        const ctx = this.audioCtx;
+        const osc = ctx.createOscillator();
+        const env = ctx.createGain();
+        osc.connect(env); env.connect(ctx.destination);
+        osc.frequency.setValueAtTime(120, when);
+        osc.frequency.exponentialRampToValueAtTime(0.01, when + 0.35);
+        env.gain.setValueAtTime(0.9, when);
+        env.gain.exponentialRampToValueAtTime(0.001, when + 0.35);
+        osc.start(when); osc.stop(when + 0.35);
+    }
+
+    _hihat(when, vol) {
+        const ctx = this.audioCtx;
+        const bufLen = Math.floor(ctx.sampleRate * 0.06);
+        const buf = ctx.createBuffer(1, bufLen, ctx.sampleRate);
+        const d   = buf.getChannelData(0);
+        for (let i = 0; i < bufLen; i++) d[i] = Math.random() * 2 - 1;
+
+        const src    = ctx.createBufferSource();
+        src.buffer   = buf;
+        const filter = ctx.createBiquadFilter();
+        filter.type  = 'highpass';
+        filter.frequency.value = 8000;
+        const env = ctx.createGain();
+        env.gain.setValueAtTime(vol, when);
+        env.gain.exponentialRampToValueAtTime(0.001, when + 0.06);
+
+        src.connect(filter); filter.connect(env); env.connect(ctx.destination);
+        src.start(when); src.stop(when + 0.06);
+    }
+}
+
+// ── GameController ────────────────────────────────────────────────────
+class GameController {
+    constructor() {
+        this.reset();
+    }
+
+    reset() {
+        this.score   = 0;
+        this.combo   = 0;
+        this.beats   = [];   // { expectedMs, scored }
+        this.lastResult = null;
+        this.resultExpiry = 0;
+    }
+
+    onBeat(beatIndex, expectedMs) {
+        this.beats.push({ expectedMs, scored: false, beatIndex });
+        // Clean up old beats (> 600ms in the past = missed)
+        const now = performance.now();
+        for (const b of this.beats) {
+            if (!b.scored && now - b.expectedMs > 600) {
+                b.scored = true;
+                this._applyMiss();
+            }
+        }
+        // Keep array small
+        if (this.beats.length > 20) this.beats.splice(0, this.beats.length - 20);
+    }
+
+    onJump(jumpMs) {
+        // Find nearest unscored beat within ±300ms
+        let best = null, bestDist = 300;
+        for (const b of this.beats) {
+            if (b.scored) continue;
+            const dist = Math.abs(jumpMs - b.expectedMs);
+            if (dist < bestDist) { best = b; bestDist = dist; }
+        }
+
+        if (!best) {
+            // Jump outside any window — count as miss
+            this._applyMiss();
+            return;
+        }
+        best.scored = true;
+
+        if (bestDist <= 100) {
+            this._apply('PERFEKT', 100);
+        } else {
+            this._apply('DOBŘE', 50);
+        }
+    }
+
+    _apply(label, pts) {
+        this.combo++;
+        const multiplier = this.combo >= 8 ? 4
+                         : this.combo >= 5 ? 3
+                         : this.combo >= 3 ? 2 : 1;
+        this.score += pts * multiplier;
+        this.lastResult   = label;
+        this.resultExpiry = performance.now() + 600;
+    }
+
+    _applyMiss() {
+        this.combo = 0;
+        this.lastResult   = 'MISS';
+        this.resultExpiry = performance.now() + 400;
+    }
+
+    multiplier() {
+        return this.combo >= 8 ? 4 : this.combo >= 5 ? 3 : this.combo >= 3 ? 2 : 1;
+    }
+}
+
+// ── DOM refs ──────────────────────────────────────────────────────────
+const gc         = document.getElementById('gc');
+const ctx        = gc.getContext('2d');
+const vid        = document.getElementById('vid');
+const bpmSelect  = document.getElementById('bpmSelect');
+const startBtn   = document.getElementById('startBtn');
+const feedbackEl = document.getElementById('feedback');
+const cdEl       = document.getElementById('countdown');
+const scoreEl    = document.getElementById('scoreVal');
+const comboEl    = document.getElementById('comboVal');
+const markerEl   = document.getElementById('railMarker');
+const statusEl   = document.getElementById('modelStatus');
+const beatDots   = [0,1,2,3].map(i => document.getElementById('bd'+i));
+
+// ── State ─────────────────────────────────────────────────────────────
+let poseDetector = null;
+let jd           = new JumpDetector();
+let gc_          = new GameController();
+let beatEngine   = null;
+let gameRunning  = false;
+let latestKps    = null;
+let poseRunning  = false;
+let videoRect    = { x:0, y:0, w:1, h:1 };
+let cameraStream = null;
+let currentBeatIndex = -1;
+let lastBeatPerfNow  = 0;
+
+// ── Camera ────────────────────────────────────────────────────────────
+async function startCamera() {
+    try {
+        cameraStream = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } },
+            audio: false,
+        });
+        vid.srcObject = cameraStream;
+        await vid.play();
+        computeVideoRect();
+    } catch (err) {
+        statusEl.textContent = 'Chyba kamery: ' + err.message;
+    }
+}
+
+function computeVideoRect() {
+    const W = gc.width  = gc.offsetWidth;
+    const H = gc.height = gc.offsetHeight;
+    const vW = vid.videoWidth  || W;
+    const vH = vid.videoHeight || H;
+    const scale = Math.min(W/vW, H/vH);
+    const dW = vW*scale, dH = vH*scale;
+    videoRect = { x:(W-dW)/2, y:(H-dH)/2, w:dW, h:dH };
+}
+window.addEventListener('resize', computeVideoRect);
+
+// ── TF.js / MoveNet ──────────────────────────────────────────────────
+async function initDetector() {
+    tf.ENV.set('WEBGL_PACK', false);
+    await tf.ready();
+    await tf.setBackend('webgl');
+    poseDetector = await poseDetection.createDetector(
+        poseDetection.SupportedModels.MoveNet,
+        {
+            modelType: poseDetection.movenet.modelType.SINGLEPOSE_LIGHTNING,
+            enableTracking: false,
+            modelUrl: '/app/svihej-camapp/v2025-july-mux/dist/tfjs-movenet/model.json',
+        }
+    );
+    statusEl.style.display = 'none';
+}
+
+// ── Pose loop ─────────────────────────────────────────────────────────
+async function poseLoop() {
+    requestAnimationFrame(poseLoop);
+    if (poseRunning || !poseDetector || vid.readyState < 2) return;
+    poseRunning = true;
+    try {
+        const poses = await poseDetector.estimatePoses(vid, { flipHorizontal: false });
+        if (poses.length > 0) {
+            const vW = vid.videoWidth || 640, vH = vid.videoHeight || 480;
+            latestKps = poses[0].keypoints.map(kp => ({ ...kp, x: kp.x/vW, y: kp.y/vH }));
+        }
+    } catch(_) {}
+    poseRunning = false;
+}
+
+// ── Skeleton drawing ──────────────────────────────────────────────────
+function drawSkeleton(kps, vr, alpha) {
+    const sx = kp => (1 - kp.x) * vr.w + vr.x;
+    const sy = kp => kp.y * vr.h + vr.y;
+    ctx.save();
+    ctx.globalAlpha = alpha * 0.85;
+    ctx.lineCap = 'round';
+    for (const [a,b] of SKEL) {
+        const pa=kps[a], pb=kps[b];
+        if (!pa||!pb||pa.score<0.3||pb.score<0.3) continue;
+        ctx.strokeStyle = 'rgba(160,100,255,0.9)';
+        ctx.lineWidth   = Math.max(1.5, vr.w*0.003);
+        ctx.beginPath();
+        ctx.moveTo(sx(pa), sy(pa));
+        ctx.lineTo(sx(pb), sy(pb));
+        ctx.stroke();
+    }
+    for (let i=0; i<kps.length; i++) {
+        const kp=kps[i];
+        if (!kp||kp.score<0.3) continue;
+        ctx.beginPath();
+        ctx.arc(sx(kp), sy(kp), Math.max(3, vr.w*0.005), 0, Math.PI*2);
+        ctx.fillStyle = i<5 ? 'rgba(255,220,50,0.95)' : 'rgba(160,100,255,0.9)';
+        ctx.fill();
+    }
+    ctx.restore();
+}
+
+// ── Game start / stop ─────────────────────────────────────────────────
+async function startGame() {
+    if (gameRunning) return;
+    const bpm = parseInt(bpmSelect.value, 10);
+    startBtn.disabled = true;
+    bpmSelect.disabled = true;
+
+    // Countdown 3-2-1
+    cdEl.style.opacity = '1';
+    for (const n of ['3','2','1','GO!']) {
+        cdEl.textContent = n;
+        await sleep(n === 'GO!' ? 700 : 900);
+    }
+    cdEl.style.opacity = '0';
+
+    jd.reset();
+    gc_.reset();
+    gameRunning = true;
+    startBtn.textContent = 'STOP';
+    startBtn.classList.add('running');
+    startBtn.disabled = false;
+
+    beatEngine = new BeatEngine(bpm, (beatIndex, perfMs) => {
+        currentBeatIndex  = beatIndex;
+        lastBeatPerfNow   = perfMs;
+        gc_.onBeat(beatIndex, perfMs);
+    });
+    beatEngine.start();
+}
+
+function stopGame() {
+    if (!gameRunning) return;
+    gameRunning = false;
+    if (beatEngine) { beatEngine.stop(); beatEngine = null; }
+    startBtn.textContent = 'START';
+    startBtn.classList.remove('running');
+    bpmSelect.disabled = false;
+    currentBeatIndex = -1;
+    lastBeatPerfNow  = 0;
+    markerEl.style.left = '0%';
+    beatDots.forEach(d => d.classList.remove('active'));
+}
+
+startBtn.addEventListener('click', () => {
+    if (gameRunning) stopGame();
+    else startGame();
+});
+
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+// ── Render loop ───────────────────────────────────────────────────────
+let lastJumpFlash = 0;
+
+function renderLoop() {
+    requestAnimationFrame(renderLoop);
+
+    const W = gc.offsetWidth, H = gc.offsetHeight;
+    if (gc.width !== W || gc.height !== H) { gc.width=W; gc.height=H; computeVideoRect(); }
+
+    const vr = videoRect;
+
+    // Black + camera
+    ctx.fillStyle = '#04000c';
+    ctx.fillRect(0, 0, W, H);
+    if (vid.readyState >= 2) {
+        ctx.save();
+        ctx.scale(-1, 1);
+        ctx.drawImage(vid, -(vr.x + vr.w), vr.y, vr.w, vr.h);
+        ctx.restore();
+    }
+
+    // Detect pose + jump
+    if (latestKps) {
+        const jumped = jd.detect(latestKps);
+
+        if (jumped) {
+            lastJumpFlash = performance.now();
+            if (gameRunning) {
+                gc_.onJump(performance.now());
+            }
+        }
+
+        const flashAge = performance.now() - lastJumpFlash;
+        const skAlpha  = flashAge < 150 ? 1.0 : 0.55;
+        drawSkeleton(latestKps, vr, skAlpha);
+
+        // Flash ring on jump
+        if (flashAge < 200) {
+            ctx.save();
+            ctx.globalAlpha = 1 - flashAge/200;
+            ctx.strokeStyle = '#cc66ff';
+            ctx.lineWidth = 6;
+            const cx = W/2, cy = H/2;
+            const r  = 60 + flashAge * 0.5;
+            ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI*2); ctx.stroke();
+            ctx.restore();
+        }
+    }
+
+    // Update score / combo UI
+    if (gameRunning) {
+        scoreEl.textContent = gc_.score;
+        const m = gc_.multiplier();
+        comboEl.textContent = gc_.combo >= 3 ? `×${m}  combo ${gc_.combo}` : '';
+    }
+
+    // Feedback flash
+    const now = performance.now();
+    if (gc_.lastResult && now < gc_.resultExpiry) {
+        const age = now - (gc_.resultExpiry - 600);
+        const alpha = Math.max(0, 1 - age / 500);
+        feedbackEl.style.opacity = alpha.toFixed(2);
+        feedbackEl.textContent   = gc_.lastResult;
+        feedbackEl.className     = gc_.lastResult === 'PERFEKT' ? 'perfekt'
+                                 : gc_.lastResult === 'DOBŘE'   ? 'dobre'
+                                 : 'miss';
+    } else {
+        feedbackEl.style.opacity = '0';
+    }
+
+    // Timing rail marker — sawtooth: 0%→100% over one beat interval, target at right (100%)
+    if (gameRunning && beatEngine && lastBeatPerfNow > 0) {
+        const intervalMs = (60 / beatEngine.bpm) * 1000;
+        const elapsed    = performance.now() - lastBeatPerfNow;
+        const frac       = Math.min(elapsed / intervalMs, 1.0);
+        markerEl.style.left = (frac * 100) + '%';
+
+        // Beat dots — light up current bar position; pulse briefly after beat
+        const barPos = currentBeatIndex % 4;
+        beatDots.forEach((d, i) => {
+            d.classList.toggle('active', gameRunning && i === barPos && elapsed < 120);
+        });
+    }
+}
+
+// ── Boot ─────────────────────────────────────────────────────────────
+(async () => {
+    renderLoop();
+    await startCamera();
+    await initDetector();
+    poseLoop();
+})();
+</script>
+</body>
+</html>
