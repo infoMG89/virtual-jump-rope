@@ -1,0 +1,824 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Svihej — Jump Debug</title>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+    background: #06000f;
+    color: #e0d8f0;
+    font-family: system-ui, sans-serif;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+header {
+    padding: 10px 18px;
+    background: rgba(16,0,30,0.97);
+    border-bottom: 1px solid rgba(130,0,220,0.35);
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    flex-shrink: 0;
+}
+.logo { font-size: 17px; font-weight: 900; color: #bf00ff; letter-spacing: -0.5px; }
+select {
+    background: #130020;
+    border: 1px solid rgba(130,0,220,0.5);
+    color: #e0d8f0;
+    padding: 6px 10px;
+    border-radius: 7px;
+    font-size: 13px;
+    cursor: pointer;
+    max-width: 320px;
+}
+.btn {
+    background: rgba(100,0,180,0.3);
+    border: 1px solid rgba(130,0,220,0.45);
+    color: #d0b0ff;
+    padding: 6px 14px;
+    border-radius: 7px;
+    font-size: 13px;
+    cursor: pointer;
+    white-space: nowrap;
+}
+.btn:hover { background: rgba(100,0,180,0.55); }
+.btn.active { background: rgba(200,0,80,0.4); border-color: rgba(200,0,80,0.6); color: #ffb0c0; }
+#statusMsg { font-size: 12px; color: #9070b0; margin-left: auto; }
+
+.main {
+    display: flex;
+    flex: 1;
+    gap: 0;
+    overflow: hidden;
+}
+
+/* ── Left: video ─────────────────────────────────────── */
+.video-col {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    padding: 14px;
+    gap: 10px;
+    min-width: 0;
+}
+.video-wrap {
+    position: relative;
+    flex: 1;
+    background: #000;
+    border-radius: 10px;
+    overflow: hidden;
+}
+video { display: none; }
+canvas#vc {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+}
+.controls {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+}
+.progress-track {
+    flex: 1;
+    height: 5px;
+    background: rgba(255,255,255,0.1);
+    border-radius: 3px;
+    cursor: pointer;
+    position: relative;
+}
+.progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #6600cc, #cc00ff);
+    border-radius: 3px;
+    pointer-events: none;
+    transition: width 0.1s linear;
+}
+.time-lbl { font-size: 12px; color: #888; white-space: nowrap; font-variant-numeric: tabular-nums; }
+
+/* ── Right: stats ────────────────────────────────────── */
+.stats-col {
+    width: 280px;
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    padding: 14px 14px 14px 0;
+    gap: 10px;
+    overflow: hidden;
+}
+
+.card {
+    background: rgba(18,0,32,0.85);
+    border: 1px solid rgba(100,0,160,0.28);
+    border-radius: 10px;
+    padding: 12px 14px;
+}
+.card-title {
+    font-size: 10px;
+    font-weight: 700;
+    color: #7040a0;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    margin-bottom: 8px;
+}
+
+/* counter */
+.counter-row {
+    display: flex;
+    align-items: flex-end;
+    gap: 10px;
+}
+#jumpCount {
+    font-size: 72px;
+    font-weight: 900;
+    color: #d070ff;
+    line-height: 1;
+    font-variant-numeric: tabular-nums;
+}
+.counter-meta {
+    padding-bottom: 6px;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+}
+#expectedLbl { font-size: 12px; color: #666; }
+#statusLbl   { font-size: 13px; font-weight: 700; }
+.s-pass { color: #44ee88; }
+.s-fail { color: #ff5555; }
+.s-none { color: #888; }
+
+/* debug signals */
+.sig-grid {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 4px 10px;
+    align-items: center;
+}
+.sl { font-size: 12px; color: #7a5a9a; white-space: nowrap; }
+.sv { font-size: 12px; font-family: monospace; color: #c8a0e8; font-weight: 600; text-align: right; }
+.sv.bad { color: #ff6060; }
+.sv.ok  { color: #60ff90; }
+
+/* signal graph */
+canvas#sg {
+    width: 100%;
+    height: 64px;
+    display: block;
+    border-radius: 5px;
+}
+
+/* timeline */
+.timeline-wrap {
+    flex: 1;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+}
+.timeline-wrap .card {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+.jump-list {
+    flex: 1;
+    overflow-y: auto;
+    scrollbar-width: thin;
+    scrollbar-color: #400080 transparent;
+}
+.jump-item {
+    display: flex;
+    gap: 8px;
+    font-size: 11.5px;
+    padding: 3px 0;
+    border-bottom: 1px solid rgba(255,255,255,0.04);
+    align-items: center;
+}
+.j-n  { color: #6030a0; width: 26px; text-align: right; flex-shrink: 0; font-variant-numeric: tabular-nums; }
+.j-t  { font-family: monospace; color: #c8a0e8; flex-shrink: 0; }
+.j-drv{ color: #555; font-size: 11px; }
+</style>
+</head>
+<body>
+
+<header>
+    <span class="logo">ŠVIHEJ DEBUG</span>
+    <button class="btn active" id="btnSrcVid">🎬 Video</button>
+    <button class="btn" id="btnSrcCam">📷 Kamera</button>
+    <select id="vidSel"></select>
+    <button class="btn" id="btnPlay">▶ Play</button>
+    <button class="btn" id="btnReset">↺ Reset</button>
+    <span id="statusMsg">Vyberte video</span>
+</header>
+
+<div class="main">
+    <!-- ── Video ── -->
+    <div class="video-col">
+        <div class="video-wrap" id="videoWrap">
+            <video id="vid" preload="auto"></video>
+            <canvas id="vc"></canvas>
+        </div>
+        <div class="controls">
+            <div class="progress-track" id="progTrack">
+                <div class="progress-fill" id="progFill" style="width:0%"></div>
+            </div>
+            <span class="time-lbl" id="timeLbl">0:00 / 0:00</span>
+        </div>
+    </div>
+
+    <!-- ── Stats ── -->
+    <div class="stats-col">
+
+        <div class="card">
+            <div class="card-title">Detekované skoky</div>
+            <div class="counter-row">
+                <div id="jumpCount">0</div>
+                <div class="counter-meta">
+                    <span id="expectedLbl">—</span>
+                    <span id="statusLbl" class="s-none">—</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-title">Signály</div>
+            <div class="sig-grid">
+                <span class="sl">hipy</span>      <span class="sv" id="sHipy">—</span>
+                <span class="sl">dhipyAvg</span>   <span class="sv" id="sDhipy">—</span>
+                <span class="sl">KhipDrv</span>    <span class="sv" id="sKdrv">—</span>
+                <span class="sl">Kdiff</span>      <span class="sv" id="sKdiff">—</span>
+                <span class="sl">Kratio</span>     <span class="sv" id="sKratio">—</span>
+                <span class="sl">Reject</span>     <span class="sv" id="sReject">—</span>
+            </div>
+            <canvas id="sg"></canvas>
+        </div>
+
+        <div class="timeline-wrap">
+            <div class="card">
+                <div class="card-title">Timeline skoků</div>
+                <div class="jump-list" id="jumpList"></div>
+            </div>
+        </div>
+
+    </div>
+</div>
+
+<!-- TF.js + MoveNet -->
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-core@4.9.0/dist/tf-core.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-converter@4.9.0/dist/tf-converter.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-webgl@4.9.0/dist/tf-backend-webgl.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/pose-detection@2.1.0/dist/pose-detection.min.js"></script>
+
+<script>
+// ── Validation videos catalogue ────────────────────────────────────────
+const VIDEOS = [
+    { file: "snozmo_18skoku.mp4",          label: "Snožmo – 18 skoků",           expected: 18 },
+    { file: "Snozmo_rychle_18skoku.mp4",   label: "Snožmo rychle – 18 skoků",    expected: 18 },
+    { file: "Cross_21crossu.mp4",          label: "Cross – 21 crossů (42 skoků)",expected: 42 },
+    { file: "vysoka_kolena_25skoku.mp4",   label: "Vysoká kolena – 25 skoků",    expected: 25 },
+    { file: "snozmo_rychle_27skoku.mp4",   label: "Snožmo rychle – 27 skoků",    expected: 27 },
+    { file: "snozmo_34skoku.mp4",          label: "Snožmo – 34 skoků",           expected: 34 },
+    { file: "Boxer step_50skoku .mp4",     label: "Boxer step – 50 skoků",       expected: 50 },
+    { file: "stridacka_89skoku.mov",       label: "Střídačka – 89 skoků",        expected: 89 },
+    { file: "mix_176skoku.MP4",            label: "Mix – 176 skoků",             expected: 176 },
+    { file: "mix_237plus_skoku.mp4",       label: "Mix – 237+ skoků",            expected: 237 },
+];
+
+// ── MoveNet keypoint indices ───────────────────────────────────────────
+const KP = {
+    leftShoulder:5, rightShoulder:6, leftHip:11, rightHip:12,
+    leftKnee:13, rightKnee:14, leftAnkle:15, rightAnkle:16,
+};
+const SKEL = [
+    [5,6],[5,7],[6,8],[7,9],[8,10],[5,11],[6,12],[11,12],
+    [11,13],[12,14],[13,15],[14,16],
+];
+
+// ── JumpDetector (tuned parameters) ───────────────────────────────────
+class JumpDetector {
+    TIME_MIN  = 100;
+    TIME_MAX  = 650;
+    MIN_SCORE = 0.25;
+    h = [];
+    d = [];
+    hipUpDrvInt   = 0;
+    hipDownDrvInt = 0;
+    KhipdiffTopLimitSet = false;
+    dbg = { KhipDrv:0, Khipdiff:0, timeUp:0, timeDown:0, ratio:0, reject:'', hipy:0, dhipyAvg:0 };
+
+    _sum(arr, key, n) {
+        const len = Math.min(arr.length, n);
+        let s = 0;
+        for (let i = 0; i < len; i++) s += arr[i][key];
+        return s;
+    }
+
+    reset() {
+        this.h = []; this.d = [];
+        this.hipUpDrvInt = 0; this.hipDownDrvInt = 0;
+        this.KhipdiffTopLimitSet = false;
+    }
+
+    detect(keypoints) {
+        const lh = keypoints[KP.leftHip],      rh = keypoints[KP.rightHip];
+        const ls = keypoints[KP.leftShoulder],  rs = keypoints[KP.rightShoulder];
+        const la = keypoints[KP.leftAnkle],     ra = keypoints[KP.rightAnkle];
+        const lk = keypoints[KP.leftKnee],      rk = keypoints[KP.rightKnee];
+
+        const minScore = Math.min(lh.score, rh.score, ls.score, rs.score);
+        if (minScore < this.MIN_SCORE) return false;
+
+        const p = 5;
+        const m = Math.max(ra.y, la.y) - (ls.y + rs.y) / 2;
+
+        const dL = lh.y - lk.y, dR = rh.y - rk.y;
+        if (dL > 0 && dR > 0 && Math.max(dL/Math.max(dR,1e-9), dR/Math.max(dL,1e-9)) > 1.1)
+            this.KhipdiffTopLimitSet = 2.2;
+
+        this.h.unshift({
+            hipy:0, dhipy:0, dhipyavg:0,
+            hiply:lh.y, hipry:rh.y, shly:ls.y, shry:rs.y,
+            knly:lk.y, knry:rk.y, anly:la.y, anry:ra.y,
+            time: Date.now(),
+        });
+        this.h[0].hipy     = (lh.y + rh.y + ls.y + rs.y) / 4;
+        this.h[0].dhipy    = this.h[1] ? this.h[0].hipy - this.h[1].hipy : 0;
+        this.h[0].dhipyavg = this._sum(this.h, 'dhipy', p) / p;
+        if (this.h.length >= 60) this.h.pop();
+
+        for (const e of this.d) e.frame++;
+
+        const cur  = this.h[0].dhipyavg;
+        const prev = this.h[1] ? this.h[1].dhipyavg : 0;
+        let jumped = false;
+
+        this.dbg.hipy     = +this.h[0].hipy.toFixed(3);
+        this.dbg.dhipyAvg = +cur.toFixed(4);
+        this.dbg.reject   = '';
+
+        if (Math.sign(cur) < Math.sign(prev)) {
+            if (this.d[0]) {
+                let pv=0, pf=0; this.hipDownDrvInt=0;
+                for (let e=1; e<=this.d[0].frame; e++) {
+                    if (this.h[e]) {
+                        if (this.h[e].dhipyavg > pv) { pv=this.h[e].dhipyavg; pf=e; }
+                        this.hipDownDrvInt += this.h[e].dhipyavg;
+                    }
+                }
+                this.d.unshift({type:3, frame:pf, value:pv});
+            }
+            this.d.unshift({type:0, frame:0, time:Date.now()});
+
+            let tUp=0, tDown=0;
+            if (this.d[4]) { tUp=this.d[2].time-this.d[4].time; tDown=this.d[0].time-this.d[2].time; }
+            const Kr   = tUp / Math.max(tDown, 1);
+            const tOk  = (tUp+tDown) > 2*this.TIME_MIN;
+            const tLim = (tUp+tDown) < 2*this.TIME_MAX;
+            const Kd   = Math.abs(this.hipDownDrvInt / (this.hipUpDrvInt||1));
+            const Klim = this.KhipdiffTopLimitSet || 2.5;
+            const Kdrv = (this.hipDownDrvInt-this.hipUpDrvInt) / ((tUp+tDown||1)*30*Math.max(m,1e-6)) * 1e7;
+
+            this.dbg.KhipDrv  = +Kdrv.toFixed(1);
+            this.dbg.Khipdiff = +Kd.toFixed(3);
+            this.dbg.timeUp   = tUp;
+            this.dbg.timeDown = tDown;
+            this.dbg.ratio    = +Kr.toFixed(2);
+
+            if (10<Kdrv && Kdrv<500 && tOk && tLim && 0.15<Kd && Kd<Klim && 0.35<Kr && Kr<2.0) {
+                this.KhipdiffTopLimitSet = false;
+                let abort=false, reason='';
+                const legL=(lk.y-lh.y)/Math.max(la.y-lh.y,0.001)*m*1e3;
+                const legR=(rk.y-rh.y)/Math.max(ra.y-rh.y,0.001)*m*1e3;
+                if (legL<10||legR<10)   { abort=true; reason=`legs(${Math.min(legL,legR).toFixed(0)})`; }
+                if (!abort && (lh.y>lk.y||lh.y>la.y||rh.y>rk.y||rh.y>ra.y)) { abort=true; reason='leg_above_hip'; }
+                if (!abort && (lh.y-ls.y>0.30||rh.y-rs.y>0.30)) { abort=true; reason='body_big'; }
+                if (!abort && (lh.y-ls.y<0.03||rh.y-rs.y<0.03)) { abort=true; reason='body_small'; }
+                if (!abort) { jumped=true; }
+                else { this.dbg.reject = reason; }
+            } else {
+                if      (!(10<Kdrv&&Kdrv<500))          this.dbg.reject=`KDrv=${Kdrv.toFixed(0)}`;
+                else if (!tOk)                           this.dbg.reject=`tShort`;
+                else if (!tLim)                          this.dbg.reject=`tLong`;
+                else if (!(0.15<Kd&&Kd<Klim))           this.dbg.reject=`Kdiff=${Kd.toFixed(2)}`;
+                else if (!(0.35<Kr&&Kr<2.0))            this.dbg.reject=`Kratio=${Kr.toFixed(2)}`;
+            }
+        }
+
+        if (Math.sign(cur) > Math.sign(prev)) {
+            if (this.d[0]) {
+                let pv=0, pf=0; this.hipUpDrvInt=0;
+                for (let e=1; e<=this.d[0].frame; e++) {
+                    if (this.h[e]) {
+                        if (this.h[e].dhipyavg < pv) { pv=this.h[e].dhipyavg; pf=e; }
+                        this.hipUpDrvInt += this.h[e].dhipyavg;
+                    }
+                }
+                this.d.unshift({type:1, frame:pf, value:pv});
+            }
+            this.d.unshift({type:2, frame:0, time:Date.now()});
+        }
+        if (8 < this.d.length) this.d.pop();
+
+        return jumped;
+    }
+}
+
+// ── DOM refs ──────────────────────────────────────────────────────────
+const vidSel   = document.getElementById('vidSel');
+const vid      = document.getElementById('vid');
+const vc       = document.getElementById('vc');
+const ctx      = vc.getContext('2d');
+const sg       = document.getElementById('sg');
+const sgCtx    = sg.getContext('2d');
+const btnPlay  = document.getElementById('btnPlay');
+const btnReset = document.getElementById('btnReset');
+const progTrack = document.getElementById('progTrack');
+const progFill  = document.getElementById('progFill');
+
+// ── State ─────────────────────────────────────────────────────────────
+let detector   = null;
+let jd         = new JumpDetector();
+let jumpCount  = 0;
+let jumpTimes  = [];   // video.currentTime of each detected jump
+let latestKps  = null;
+let poseRunning = false;
+let videoRect   = {x:0, y:0, w:1, h:1};
+let hipyBuf     = [];   // rolling buffer for signal graph
+let jumpBuf     = [];   // positions in hipyBuf where jump fired
+const BUF_SIZE  = 300;
+
+// ── Populate video picker ──────────────────────────────────────────────
+for (const v of VIDEOS) {
+    const opt = document.createElement('option');
+    opt.value = `/val/${encodeURIComponent(v.file)}`;
+    opt.textContent = v.label;
+    vidSel.appendChild(opt);
+}
+
+// ── Source mode ───────────────────────────────────────────────────────
+let isCamera = false;
+let cameraStream = null;
+
+function stopCamera() {
+    if (cameraStream) { cameraStream.getTracks().forEach(t => t.stop()); cameraStream = null; }
+    vid.srcObject = null;
+}
+
+async function startCamera() {
+    stopCamera();
+    vid.src = '';
+    document.getElementById('statusMsg').textContent = 'Spouštím kameru…';
+    try {
+        cameraStream = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } },
+            audio: false,
+        });
+        vid.srcObject = cameraStream;
+        await vid.play();
+        computeVideoRect();
+        resetDetection();
+        document.getElementById('statusMsg').textContent = 'Kamera aktivní';
+        progFill.style.width = '0%';
+        document.getElementById('timeLbl').textContent = '– živě –';
+    } catch (err) {
+        document.getElementById('statusMsg').textContent = 'Chyba kamery: ' + err.message;
+    }
+}
+
+document.getElementById('btnSrcVid').addEventListener('click', () => {
+    if (!isCamera) return;
+    isCamera = false;
+    stopCamera();
+    document.getElementById('btnSrcVid').classList.add('active');
+    document.getElementById('btnSrcCam').classList.remove('active');
+    document.getElementById('vidSel').style.display = '';
+    btnPlay.style.display = '';
+    loadSelected();
+});
+
+document.getElementById('btnSrcCam').addEventListener('click', () => {
+    if (isCamera) return;
+    isCamera = true;
+    document.getElementById('btnSrcCam').classList.add('active');
+    document.getElementById('btnSrcVid').classList.remove('active');
+    document.getElementById('vidSel').style.display = 'none';
+    btnPlay.style.display = 'none';
+    startCamera();
+});
+
+// ── Load video on picker change ────────────────────────────────────────
+function loadSelected() {
+    if (isCamera) return;
+    const url = vidSel.value;
+    vid.src = url;
+    vid.load();
+    resetDetection();
+    document.getElementById('statusMsg').textContent = 'Načítám…';
+    btnPlay.textContent = '▶ Play';
+    btnPlay.classList.remove('active');
+}
+vidSel.addEventListener('change', loadSelected);
+
+vid.addEventListener('loadedmetadata', () => {
+    computeVideoRect();
+    if (!isCamera) {
+        document.getElementById('statusMsg').textContent = 'Připraveno';
+        progFill.style.width = '0%';
+        document.getElementById('timeLbl').textContent = `0:00 / ${fmtTime(vid.duration)}`;
+    }
+});
+
+vid.addEventListener('timeupdate', () => {
+    if (isCamera || !vid.duration) return;
+    progFill.style.width = (vid.currentTime / vid.duration * 100) + '%';
+    document.getElementById('timeLbl').textContent =
+        `${fmtTime(vid.currentTime)} / ${fmtTime(vid.duration)}`;
+});
+
+// Reset when video loops
+vid.addEventListener('ended', () => {
+    if (isCamera) return;
+    btnPlay.textContent = '▶ Play';
+    btnPlay.classList.remove('active');
+});
+vid.addEventListener('seeked', () => {
+    if (!isCamera && vid.currentTime < 0.1) resetDetection();
+});
+
+// ── Play / pause ──────────────────────────────────────────────────────
+btnPlay.addEventListener('click', () => {
+    if (isCamera || !vid.src) return;
+    if (vid.paused) {
+        vid.play();
+        btnPlay.textContent = '⏸ Pause';
+        btnPlay.classList.add('active');
+    } else {
+        vid.pause();
+        btnPlay.textContent = '▶ Play';
+        btnPlay.classList.remove('active');
+    }
+});
+
+// ── Reset ─────────────────────────────────────────────────────────────
+function resetDetection() {
+    jd.reset();
+    jumpCount = 0; jumpTimes = []; hipyBuf = []; jumpBuf = [];
+    document.getElementById('jumpCount').textContent = '0';
+    document.getElementById('jumpList').innerHTML = '';
+    updateStatus();
+}
+btnReset.addEventListener('click', () => {
+    resetDetection();
+    vid.currentTime = 0;
+});
+
+// ── Progress bar seeking ──────────────────────────────────────────────
+progTrack.addEventListener('click', e => {
+    if (!vid.duration) return;
+    const r = progTrack.getBoundingClientRect();
+    vid.currentTime = (e.clientX - r.left) / r.width * vid.duration;
+    resetDetection();
+});
+
+// ── Resize / video rect ───────────────────────────────────────────────
+function computeVideoRect() {
+    const W = vc.width = vc.offsetWidth;
+    const H = vc.height = vc.offsetHeight;
+    const vW = vid.videoWidth  || W;
+    const vH = vid.videoHeight || H;
+    const scale = Math.min(W/vW, H/vH);
+    const dW = vW*scale, dH = vH*scale;
+    videoRect = { x:(W-dW)/2, y:(H-dH)/2, w:dW, h:dH };
+    // Resize signal graph canvas
+    sg.width  = sg.offsetWidth;
+    sg.height = sg.offsetHeight;
+}
+vid.addEventListener('loadedmetadata', computeVideoRect);
+window.addEventListener('resize', computeVideoRect);
+computeVideoRect();
+
+// ── Init TF.js ────────────────────────────────────────────────────────
+async function initDetector() {
+    document.getElementById('statusMsg').textContent = 'Načítám model…';
+    tf.ENV.set('WEBGL_PACK', false);
+    await tf.ready();
+    await tf.setBackend('webgl');
+    detector = await poseDetection.createDetector(
+        poseDetection.SupportedModels.MoveNet,
+        {
+            modelType: poseDetection.movenet.modelType.SINGLEPOSE_LIGHTNING,
+            enableTracking: false,
+            modelUrl: '/app/svihej-camapp/v2025-july-mux/dist/tfjs-movenet/model.json',
+        }
+    );
+    document.getElementById('statusMsg').textContent = 'Model připraven ✓';
+}
+
+// ── Pose loop ─────────────────────────────────────────────────────────
+let lastProcessedVideoTime = -1;
+
+async function poseLoop() {
+    requestAnimationFrame(poseLoop);
+    const ready = vid.readyState >= 2 && (isCamera || !vid.paused);
+    if (poseRunning || !detector || !ready) return;
+    if (!isCamera && vid.currentTime === lastProcessedVideoTime) return;
+    if (!isCamera) lastProcessedVideoTime = vid.currentTime;
+    poseRunning = true;
+    try {
+        // Always detect on native video orientation; skeleton mirroring handled in drawSkeleton
+        const poses = await detector.estimatePoses(vid, { flipHorizontal: false });
+        if (poses.length > 0) {
+            const vW = vid.videoWidth || 640, vH = vid.videoHeight || 480;
+            latestKps = poses[0].keypoints.map(kp => ({
+                ...kp, x: kp.x/vW, y: kp.y/vH,
+            }));
+        }
+    } catch(_) {}
+    poseRunning = false;
+}
+
+// ── Render loop ───────────────────────────────────────────────────────
+function renderLoop() {
+    requestAnimationFrame(renderLoop);
+    const W = vc.offsetWidth, H = vc.offsetHeight;
+    if (vc.width !== W || vc.height !== H) { vc.width=W; vc.height=H; computeVideoRect(); }
+
+    const vr = videoRect;
+
+    // Black background + letterboxed video
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, W, H);
+    if (vid.readyState >= 2) {
+        if (isCamera) {
+            // Mirror camera horizontally (selfie view)
+            ctx.save();
+            ctx.scale(-1, 1);
+            ctx.drawImage(vid, -(vr.x + vr.w), vr.y, vr.w, vr.h);
+            ctx.restore();
+        } else {
+            ctx.drawImage(vid, vr.x, vr.y, vr.w, vr.h);
+        }
+    }
+
+    // Skeleton overlay
+    if (latestKps) {
+        const jumped = jd.detect(latestKps);
+
+        // Signal graph buffer
+        hipyBuf.push(jd.dbg.hipy);
+        if (jumped) jumpBuf.push(hipyBuf.length - 1);
+        if (hipyBuf.length > BUF_SIZE) {
+            const trim = hipyBuf.length - BUF_SIZE;
+            hipyBuf.splice(0, trim);
+            jumpBuf = jumpBuf.map(i => i - trim).filter(i => i >= 0);
+        }
+
+        if (jumped) {
+            jumpCount++;
+            jumpTimes.push(vid.currentTime);
+            addJumpEntry(jumpCount, vid.currentTime, jd.dbg.KhipDrv);
+        }
+
+        drawSkeleton(latestKps, vr, jumped ? 1 : 0.55);
+        updateDebugPanel();
+        updateStatus();
+        drawSignalGraph();
+    }
+}
+
+// ── Skeleton drawing ──────────────────────────────────────────────────
+function drawSkeleton(kps, vr, alpha) {
+    // Camera display is mirrored, so flip skeleton x to match
+    const sx = kp => isCamera ? (1 - kp.x) * vr.w + vr.x : kp.x * vr.w + vr.x;
+    const sy = kp => kp.y * vr.h + vr.y;
+
+    ctx.save();
+    ctx.globalAlpha = alpha * 0.85;
+    ctx.lineCap = 'round';
+    for (const [a,b] of SKEL) {
+        const pa=kps[a], pb=kps[b];
+        if (!pa||!pb||pa.score<0.3||pb.score<0.3) continue;
+        ctx.strokeStyle = 'rgba(160,100,255,0.9)';
+        ctx.lineWidth   = Math.max(1.5, vr.w*0.003);
+        ctx.beginPath();
+        ctx.moveTo(sx(pa), sy(pa));
+        ctx.lineTo(sx(pb), sy(pb));
+        ctx.stroke();
+    }
+    for (let i=0; i<kps.length; i++) {
+        const kp=kps[i];
+        if (!kp||kp.score<0.3) continue;
+        ctx.beginPath();
+        ctx.arc(sx(kp), sy(kp), Math.max(3, vr.w*0.005), 0, Math.PI*2);
+        ctx.fillStyle = i<5 ? 'rgba(255,220,50,0.95)' : 'rgba(160,100,255,0.9)';
+        ctx.fill();
+    }
+    ctx.restore();
+}
+
+// ── Signal graph ──────────────────────────────────────────────────────
+function drawSignalGraph() {
+    const W = sg.width, H = sg.height;
+    sgCtx.clearRect(0, 0, W, H);
+    if (hipyBuf.length < 2) return;
+
+    // Background
+    sgCtx.fillStyle = 'rgba(0,0,0,0.4)';
+    sgCtx.fillRect(0, 0, W, H);
+
+    const n = hipyBuf.length;
+    const min = Math.min(...hipyBuf) - 0.01;
+    const max = Math.max(...hipyBuf) + 0.01;
+    const range = max - min || 0.01;
+
+    function px(i) { return i / (BUF_SIZE-1) * W; }
+    function py(v) { return H - (v - min) / range * H * 0.9 - H*0.05; }
+
+    // Hipy line
+    sgCtx.strokeStyle = 'rgba(160,100,255,0.85)';
+    sgCtx.lineWidth = 1.5;
+    sgCtx.beginPath();
+    for (let i=0; i<n; i++) {
+        const x = px(BUF_SIZE - n + i);
+        i===0 ? sgCtx.moveTo(x, py(hipyBuf[i])) : sgCtx.lineTo(x, py(hipyBuf[i]));
+    }
+    sgCtx.stroke();
+
+    // Jump markers
+    sgCtx.fillStyle = '#ffdd00';
+    for (const ji of jumpBuf) {
+        if (ji >= BUF_SIZE - n) {
+            const x = px(BUF_SIZE - n + (ji - (BUF_SIZE - n)));
+            const v = hipyBuf[ji - (BUF_SIZE - n)] ?? hipyBuf[0];
+            // Actually: jumpBuf[i] is index into hipyBuf
+            const idx = ji;
+            if (idx < hipyBuf.length) {
+                const xi = px(BUF_SIZE - n + idx);
+                sgCtx.beginPath();
+                sgCtx.arc(xi, py(hipyBuf[idx]), 4, 0, Math.PI*2);
+                sgCtx.fill();
+            }
+        }
+    }
+}
+
+// ── Debug panel ───────────────────────────────────────────────────────
+function updateDebugPanel() {
+    const d = jd.dbg;
+    document.getElementById('sHipy').textContent   = d.hipy;
+    document.getElementById('sDhipy').textContent  = d.dhipyAvg;
+    document.getElementById('sKdrv').textContent   = d.KhipDrv;
+    document.getElementById('sKdiff').textContent  = d.Khipdiff;
+    document.getElementById('sKratio').textContent = d.ratio;
+    const rejEl = document.getElementById('sReject');
+    rejEl.textContent  = d.reject || '—';
+    rejEl.className    = 'sv' + (d.reject ? ' bad' : ' ok');
+}
+
+function updateStatus() {
+    const meta = vidSel.selectedIndex >= 0 ? VIDEOS[vidSel.selectedIndex] : null;
+    const exp  = meta ? meta.expected : null;
+    const expLbl = document.getElementById('expectedLbl');
+    const sLbl   = document.getElementById('statusLbl');
+    if (exp === null) { expLbl.textContent='—'; sLbl.textContent='—'; sLbl.className='s-none'; return; }
+    expLbl.textContent = `Očekáváno: ${exp}`;
+    const lo=exp*0.9, hi = meta.file.includes('237') ? Infinity : exp*1.1;
+    if (jumpCount===0) { sLbl.textContent='—'; sLbl.className='s-none'; }
+    else if (jumpCount>=lo && jumpCount<=hi) { sLbl.textContent='✓ V TOLERANCI'; sLbl.className='s-pass'; }
+    else { sLbl.textContent=`✗ MIMO ROZSAH (${lo.toFixed(0)}–${hi===Infinity?'∞':hi.toFixed(0)})`; sLbl.className='s-fail'; }
+    document.getElementById('jumpCount').textContent = jumpCount;
+}
+
+function addJumpEntry(n, t, kdrv) {
+    const list = document.getElementById('jumpList');
+    const div  = document.createElement('div');
+    div.className = 'jump-item';
+    div.innerHTML =
+        `<span class="j-n">#${n}</span>` +
+        `<span class="j-t">${fmtTime(t)}</span>` +
+        `<span class="j-drv">drv=${Math.round(kdrv)}</span>`;
+    list.appendChild(div);
+    list.scrollTop = list.scrollHeight;
+}
+
+function fmtTime(s) {
+    const m = Math.floor(s/60), sec = Math.floor(s%60);
+    return `${m}:${sec.toString().padStart(2,'0')}`;
+}
+
+// ── Boot ─────────────────────────────────────────────────────────────
+(async () => {
+    loadSelected();
+    renderLoop();
+    await initDetector();
+    poseLoop();
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,564 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Boss Fight</title>
+    <style>
+        html, body {
+            margin: 0;
+            padding: 0;
+            background: transparent;
+            overflow: hidden;
+            width: 100%;
+            height: 100%;
+        }
+        canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+        }
+    </style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<script>
+'use strict';
+
+// ── MoveNet keypoint indices ─────────────────────────────────────────────────
+const KP = {
+    nose: 0, leftEye: 1, rightEye: 2, leftEar: 3, rightEar: 4,
+    leftShoulder: 5, rightShoulder: 6,
+    leftElbow: 7, rightElbow: 8,
+    leftWrist: 9, rightWrist: 10,
+    leftHip: 11, rightHip: 12,
+    leftKnee: 13, rightKnee: 14,
+    leftAnkle: 15, rightAnkle: 16,
+};
+
+// ── Game constants ───────────────────────────────────────────────────────────
+const BOSS_HP_MAX   = 250;
+const PLAYER_HP_MAX = 100;
+const JUMP_DMG_BASE = 7;
+const JUMP_DMG_VAR  = 6;
+const BOSS_ATK_CD   = 4200;   // ms between attacks
+const BOSS_ATK_WIN  = 1400;   // ms to dodge (window)
+const BOSS_ATK_DMG  = 18;
+const START_GRACE   = 3000;   // ms before first attack
+
+// ── State ────────────────────────────────────────────────────────────────────
+let gameActive   = false;
+let gameResult   = null;      // null | 'win' | 'lose'
+let bossHp       = BOSS_HP_MAX;
+let playerHp     = PLAYER_HP_MAX;
+let lastAtkTime  = 0;
+let bossAttacking = false;
+let bossAtkStart  = 0;
+let bossShake    = 0;
+let pose         = null;      // latest keypoints array
+
+// Visual effects pools
+let hitNums  = [];   // {x, y, text, color, life, vy}
+let slashes  = [];   // {x, y, angle, life}
+let flashes  = [];   // {color, life}
+let partyBits = []; // confetti on win
+
+// ── Canvas setup ─────────────────────────────────────────────────────────────
+const canvas = document.getElementById('game');
+const ctx    = canvas.getContext('2d');
+
+function resize() {
+    canvas.width  = window.innerWidth;
+    canvas.height = window.innerHeight;
+}
+window.addEventListener('resize', resize);
+resize();
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+function lerp(a, b, t) { return a + (b - a) * t; }
+function rnd(n) { return Math.random() * n; }
+function rndPm(n) { return (Math.random() - 0.5) * 2 * n; }
+
+function drawRoundRect(x, y, w, h, r, fill, stroke) {
+    ctx.beginPath();
+    ctx.roundRect(x, y, w, h, r);
+    if (fill)   { ctx.fillStyle   = fill;   ctx.fill(); }
+    if (stroke) { ctx.strokeStyle = stroke; ctx.stroke(); }
+}
+
+// ── Boss character ───────────────────────────────────────────────────────────
+function drawBoss(cx, cy) {
+    const t      = Date.now() / 1000;
+    const dmgR   = bossHp / BOSS_HP_MAX;
+    const breath = 0.04 * Math.sin(t * 1.8);
+    const angry  = 1 - dmgR;
+
+    ctx.save();
+    ctx.translate(cx + bossShake, cy);
+
+    // Tentacle arms
+    for (let i = 0; i < 5; i++) {
+        const baseAngle = (i / 5) * Math.PI + Math.PI / 10;
+        const waveOff   = 0.4 * Math.sin(t * 1.2 + i * 1.3);
+        const r1 = 58, r2 = 120;
+        const ax = Math.cos(baseAngle + waveOff) * r1;
+        const ay = Math.sin(baseAngle + waveOff) * r1;
+        const tx = Math.cos(baseAngle + waveOff * 1.5) * r2;
+        const ty = Math.sin(baseAngle + waveOff * 1.5) * r2;
+
+        ctx.beginPath();
+        ctx.moveTo(ax, ay);
+        ctx.quadraticCurveTo(
+            (ax + tx) / 2 + rndPm(12),
+            (ay + ty) / 2 + rndPm(12),
+            tx, ty
+        );
+        ctx.strokeStyle = `rgba(${Math.floor(120 + angry * 80)}, 0, ${Math.floor(200 - angry * 100)}, 0.65)`;
+        ctx.lineWidth = 7 - i * 0.8;
+        ctx.lineCap   = 'round';
+        ctx.stroke();
+    }
+
+    // Body glow (damage redness)
+    const bodyR = 58 * (1 + breath);
+    const glow  = ctx.createRadialGradient(0, 0, 10, 0, 0, bodyR + 30);
+    glow.addColorStop(0,   `rgba(${Math.floor(angry * 200)}, 0, 80, 0.15)`);
+    glow.addColorStop(1,   `rgba(0,0,0,0)`);
+    ctx.beginPath();
+    ctx.arc(0, 0, bodyR + 30, 0, Math.PI * 2);
+    ctx.fillStyle = glow;
+    ctx.fill();
+
+    // Main body
+    const bodyGrad = ctx.createRadialGradient(-10, -10, 5, 0, 0, bodyR);
+    bodyGrad.addColorStop(0,   `rgba(${Math.floor(80 + angry * 120)}, 10, ${Math.floor(100 - angry * 60)}, 0.95)`);
+    bodyGrad.addColorStop(0.7, `rgba(40, 0, 70, 0.9)`);
+    bodyGrad.addColorStop(1,   `rgba(20, 0, 40, 0.85)`);
+    ctx.beginPath();
+    ctx.arc(0, 0, bodyR, 0, Math.PI * 2);
+    ctx.fillStyle = bodyGrad;
+    ctx.fill();
+
+    // Eyes
+    const eyeGlow = 0.6 + 0.4 * Math.sin(t * 2.5 + 0.5);
+    const eyeR    = Math.floor(255 * eyeGlow);
+    const eyeG    = Math.floor(80  * (1 - angry));
+
+    for (const [ex, ey] of [[-21, -10], [21, -10]]) {
+        // Eye whites glow
+        ctx.shadowBlur  = 12;
+        ctx.shadowColor = `rgba(${eyeR}, ${eyeG}, 0, 0.9)`;
+        ctx.beginPath();
+        ctx.ellipse(ex, ey, 13, 9, 0, 0, Math.PI * 2);
+        ctx.fillStyle = `rgba(${eyeR}, ${eyeG}, 0, ${0.7 + eyeGlow * 0.3})`;
+        ctx.fill();
+        ctx.shadowBlur = 0;
+        // Pupil
+        ctx.beginPath();
+        ctx.ellipse(ex + 2 * Math.sin(t * 0.8), ey + 1 * Math.cos(t * 0.6), 5, 6, 0, 0, Math.PI * 2);
+        ctx.fillStyle = '#0a0010';
+        ctx.fill();
+    }
+
+    // Mouth
+    const mouthY  = 16 + 6 * angry;
+    const mouthOpen = 8 + 6 * angry;
+    ctx.beginPath();
+    ctx.moveTo(-22, mouthY);
+    ctx.quadraticCurveTo(0, mouthY + mouthOpen, 22, mouthY);
+    ctx.strokeStyle = `rgba(${Math.floor(180 + angry * 75)}, 60, 0, 0.9)`;
+    ctx.lineWidth = 3;
+    ctx.stroke();
+
+    // Teeth
+    ctx.fillStyle = '#e8ddc0';
+    for (let i = -2; i <= 2; i++) {
+        const tx2 = i * 9;
+        const ty2 = mouthY + 4;
+        ctx.beginPath();
+        ctx.moveTo(tx2 - 4, ty2);
+        ctx.lineTo(tx2, ty2 + 7 + angry * 3);
+        ctx.lineTo(tx2 + 4, ty2);
+        ctx.closePath();
+        ctx.fill();
+    }
+
+    // Attack flash ring
+    if (bossAttacking) {
+        const prog = (Date.now() - bossAtkStart) / BOSS_ATK_WIN;
+        const pulseA = 0.5 + 0.5 * Math.sin(prog * Math.PI * 8);
+        ctx.beginPath();
+        ctx.arc(0, 0, bodyR + 15 + 10 * (1 - prog), 0, Math.PI * 2);
+        ctx.strokeStyle = `rgba(255, 60, 0, ${pulseA * (1 - prog * 0.4)})`;
+        ctx.lineWidth = 5;
+        ctx.stroke();
+    }
+
+    ctx.restore();
+}
+
+// ── HP bar ───────────────────────────────────────────────────────────────────
+function drawHpBar(x, y, w, h, hp, hpMax, color, label) {
+    const ratio = Math.max(0, hp / hpMax);
+    const r = 5;
+
+    // Track
+    drawRoundRect(x, y, w, h, r, 'rgba(0,0,0,0.6)');
+
+    // Danger pulse when low
+    let barColor = color;
+    if (ratio < 0.3) {
+        const pulse = 0.6 + 0.4 * Math.sin(Date.now() / 180);
+        barColor = color === '#3c3' ? `rgba(255,${Math.floor(40+60*pulse)},0,0.95)` : color;
+    }
+
+    if (ratio > 0) {
+        drawRoundRect(x + 2, y + 2, (w - 4) * ratio, h - 4, r - 1, barColor);
+    }
+
+    // Label
+    ctx.fillStyle = '#fff';
+    ctx.font = `bold 12px sans-serif`;
+    ctx.shadowBlur  = 3;
+    ctx.shadowColor = '#000';
+    ctx.textAlign = 'left';
+    ctx.fillText(`${label}  ${hp} / ${hpMax}`, x + 8, y + h - 5);
+    ctx.shadowBlur = 0;
+}
+
+// ── Slash effect ─────────────────────────────────────────────────────────────
+function drawSlash(e) {
+    ctx.save();
+    ctx.translate(e.x, e.y);
+    ctx.rotate(e.angle);
+    ctx.globalAlpha = e.life;
+
+    ctx.strokeStyle = `rgba(255,255,255,${e.life})`;
+    ctx.lineWidth   = 4;
+    ctx.lineCap     = 'round';
+    ctx.beginPath(); ctx.moveTo(-50, -8); ctx.lineTo(50, 8); ctx.stroke();
+
+    ctx.strokeStyle = `rgba(255,220,0,${e.life * 0.7})`;
+    ctx.lineWidth   = 2;
+    ctx.beginPath(); ctx.moveTo(-40, -3); ctx.lineTo(40, 3); ctx.stroke();
+
+    ctx.restore();
+}
+
+// ── Skeleton overlay (pose visualization) ────────────────────────────────────
+const SKEL_LINKS = [
+    [KP.leftShoulder, KP.rightShoulder],
+    [KP.leftShoulder, KP.leftElbow],    [KP.leftElbow,  KP.leftWrist],
+    [KP.rightShoulder,KP.rightElbow],   [KP.rightElbow, KP.rightWrist],
+    [KP.leftShoulder, KP.leftHip],      [KP.rightShoulder, KP.rightHip],
+    [KP.leftHip,      KP.rightHip],
+    [KP.leftHip,      KP.leftKnee],     [KP.leftKnee,  KP.leftAnkle],
+    [KP.rightHip,     KP.rightKnee],    [KP.rightKnee, KP.rightAnkle],
+];
+
+function drawSkeleton(kps, W, H, alpha) {
+    if (!kps || kps.length < 17) return;
+    ctx.save();
+    ctx.globalAlpha = alpha;
+
+    for (const [a, b] of SKEL_LINKS) {
+        const pa = kps[a], pb = kps[b];
+        if (!pa || !pb) continue;
+        if (pa.score < 0.3 || pb.score < 0.3) continue;
+        ctx.beginPath();
+        ctx.moveTo(pa.x * W, pa.y * H);
+        ctx.lineTo(pb.x * W, pb.y * H);
+        ctx.strokeStyle = 'rgba(0,200,255,0.7)';
+        ctx.lineWidth   = 2;
+        ctx.stroke();
+    }
+
+    for (let i = 0; i < kps.length; i++) {
+        const kp = kps[i];
+        if (!kp || kp.score < 0.3) continue;
+        ctx.beginPath();
+        ctx.arc(kp.x * W, kp.y * H, 4, 0, Math.PI * 2);
+        ctx.fillStyle = i < 5 ? 'rgba(255,200,0,0.9)' : 'rgba(0,200,255,0.9)';
+        ctx.fill();
+    }
+
+    ctx.restore();
+}
+
+// ── Sword visualization (wrist → sword trail) ────────────────────────────────
+let swordTrail = [];
+function drawSword(kps, W, H) {
+    if (!kps) return;
+    const rw = kps[KP.rightWrist];
+    if (!rw || rw.score < 0.3) return;
+
+    const x = rw.x * W, y = rw.y * H;
+    swordTrail.push({x, y, life: 1});
+    if (swordTrail.length > 12) swordTrail.shift();
+
+    for (let i = 1; i < swordTrail.length; i++) {
+        const a = swordTrail[i - 1], b = swordTrail[i];
+        const t = i / swordTrail.length;
+        ctx.beginPath();
+        ctx.moveTo(a.x, a.y);
+        ctx.lineTo(b.x, b.y);
+        ctx.strokeStyle = `rgba(0,200,255,${t * 0.5})`;
+        ctx.lineWidth = t * 5;
+        ctx.stroke();
+    }
+    ctx.beginPath();
+    ctx.arc(x, y, 5, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(100,230,255,0.9)';
+    ctx.fill();
+}
+
+// ── Confetti ─────────────────────────────────────────────────────────────────
+function spawnConfetti(W, H) {
+    for (let i = 0; i < 60; i++) {
+        partyBits.push({
+            x: rnd(W), y: rnd(H * 0.5),
+            vx: rndPm(3), vy: -2 - rnd(4),
+            size: 6 + rnd(8),
+            color: `hsl(${Math.floor(rnd(360))},90%,60%)`,
+            life: 1,
+            rot: rnd(Math.PI * 2), rotV: rndPm(0.15),
+        });
+    }
+}
+
+// ── Main game loop ────────────────────────────────────────────────────────────
+let lastFrame = 0;
+function loop(ts) {
+    const W = canvas.width, H = canvas.height;
+    const now = Date.now();
+
+    ctx.clearRect(0, 0, W, H);
+
+    if (!gameActive) {
+        requestAnimationFrame(loop);
+        return;
+    }
+
+    // ── Background gradient (top area only) ───────────────────────────────
+    const topH = H * 0.52;
+    const bgGrad = ctx.createLinearGradient(0, 0, 0, topH);
+    bgGrad.addColorStop(0,   'rgba(8, 0, 18, 0.82)');
+    bgGrad.addColorStop(0.7, 'rgba(8, 0, 18, 0.5)');
+    bgGrad.addColorStop(1,   'rgba(0, 0, 0, 0)');
+    ctx.fillStyle = bgGrad;
+    ctx.fillRect(0, 0, W, topH);
+
+    // ── Boss ──────────────────────────────────────────────────────────────
+    const bossCX = W / 2;
+    const bossCY = H * 0.21;
+
+    // Boss attack logic
+    if (!gameResult) {
+        if (!bossAttacking && now - lastAtkTime > BOSS_ATK_CD) {
+            bossAttacking = true;
+            bossAtkStart  = now;
+        }
+        if (bossAttacking && now - bossAtkStart > BOSS_ATK_WIN) {
+            bossAttacking = false;
+            lastAtkTime   = now;
+            playerHp      = Math.max(0, playerHp - BOSS_ATK_DMG);
+            hitNums.push({ x: W * 0.12, y: H * 0.48, text: `-${BOSS_ATK_DMG}`, color: '#f55', life: 1, vy: -1.5 });
+            flashes.push({ color: 'rgba(255,0,0,0.18)', life: 1 });
+            if (playerHp <= 0) { gameResult = 'lose'; }
+        }
+    }
+
+    // Boss shake decay
+    bossShake *= 0.72;
+    if (Math.abs(bossShake) < 0.5) bossShake = 0;
+
+    drawBoss(bossCX, bossCY);
+
+    // ── Skeleton overlay (lower body area) ──────────────────────────────
+    if (pose) {
+        drawSkeleton(pose, W, H, 0.35);
+        drawSword(pose, W, H);
+    }
+
+    // ── HP bars ───────────────────────────────────────────────────────────
+    const barW  = W * 0.36;
+    const barH  = 24;
+    const barY  = H * 0.43;
+    drawHpBar(W * 0.04,              barY, barW, barH, playerHp, PLAYER_HP_MAX, '#3c3', 'HP');
+    drawHpBar(W - W * 0.04 - barW,  barY, barW, barH, bossHp,   BOSS_HP_MAX,   '#c33', 'BOSS');
+
+    // ── Attack warning ────────────────────────────────────────────────────
+    if (bossAttacking && !gameResult) {
+        const prog = (now - bossAtkStart) / BOSS_ATK_WIN;
+        const pulse = 0.8 + 0.2 * Math.sin(prog * Math.PI * 10);
+        ctx.fillStyle = `rgba(255, 50, 0, ${0.08 * pulse})`;
+        ctx.fillRect(0, 0, W, H);
+
+        const warnAlpha = Math.min(1, (1 - prog * 0.5) * pulse);
+        ctx.save();
+        ctx.globalAlpha = warnAlpha;
+        ctx.fillStyle   = '#ffdd00';
+        ctx.font        = `bold ${Math.floor(H * 0.045 + 3 * Math.sin(prog * 30))}px sans-serif`;
+        ctx.textAlign   = 'center';
+        ctx.shadowBlur  = 16;
+        ctx.shadowColor = '#ff4400';
+        ctx.fillText('⚡  SKOČ!  ⚡', W / 2, H * 0.39);
+        ctx.restore();
+    }
+
+    // ── Slash effects ─────────────────────────────────────────────────────
+    slashes = slashes.filter(e => e.life > 0.05);
+    for (const e of slashes) {
+        drawSlash(e);
+        e.life -= 0.07;
+        e.y    -= 1.5;
+    }
+
+    // ── Hit numbers ───────────────────────────────────────────────────────
+    hitNums = hitNums.filter(e => e.life > 0.04);
+    for (const e of hitNums) {
+        ctx.save();
+        ctx.globalAlpha = e.life;
+        ctx.fillStyle   = e.color;
+        ctx.font        = `bold ${Math.floor(20 + 8 * e.life)}px sans-serif`;
+        ctx.textAlign   = 'center';
+        ctx.shadowBlur  = 6; ctx.shadowColor = '#000';
+        ctx.fillText(e.text, e.x, e.y);
+        ctx.restore();
+        e.life -= 0.035;
+        e.y    += e.vy;
+    }
+
+    // ── Screen flashes ────────────────────────────────────────────────────
+    flashes = flashes.filter(e => e.life > 0.02);
+    for (const e of flashes) {
+        ctx.fillStyle = e.color.replace(/[\d.]+\)$/, `${(e.life * 0.5).toFixed(2)})`);
+        ctx.fillRect(0, 0, W, H);
+        e.life -= 0.12;
+    }
+
+    // ── Win / Lose overlay ────────────────────────────────────────────────
+    if (gameResult) {
+        ctx.fillStyle = 'rgba(0,0,0,0.78)';
+        ctx.fillRect(0, 0, W, H);
+
+        // Confetti (win)
+        if (gameResult === 'win') {
+            partyBits = partyBits.filter(b => b.life > 0.05);
+            for (const b of partyBits) {
+                ctx.save();
+                ctx.globalAlpha = b.life;
+                ctx.translate(b.x, b.y);
+                ctx.rotate(b.rot);
+                ctx.fillStyle = b.color;
+                ctx.fillRect(-b.size / 2, -b.size / 4, b.size, b.size / 2);
+                ctx.restore();
+                b.x   += b.vx;
+                b.y   += b.vy;
+                b.vy  += 0.12;
+                b.rot += b.rotV;
+                b.life -= 0.007;
+            }
+        }
+
+        ctx.textAlign = 'center';
+        if (gameResult === 'win') {
+            ctx.fillStyle = '#ffd700';
+            ctx.font      = `bold ${Math.floor(W / 7)}px sans-serif`;
+            ctx.shadowBlur = 30; ctx.shadowColor = '#ff8800';
+            ctx.fillText('🏆 VÍTĚZ!', W / 2, H / 2 - 20);
+            ctx.shadowBlur = 0;
+            ctx.fillStyle = '#fff';
+            ctx.font      = `${Math.floor(W / 18)}px sans-serif`;
+            ctx.fillText('Boss poražen!', W / 2, H / 2 + 35);
+        } else {
+            ctx.fillStyle = '#ff4444';
+            ctx.font      = `bold ${Math.floor(W / 7)}px sans-serif`;
+            ctx.shadowBlur = 20; ctx.shadowColor = '#900';
+            ctx.fillText('💀 PROHRA', W / 2, H / 2 - 20);
+            ctx.shadowBlur = 0;
+            ctx.fillStyle = '#ccc';
+            ctx.font      = `${Math.floor(W / 18)}px sans-serif`;
+            ctx.fillText('Boss tě porazil.', W / 2, H / 2 + 35);
+        }
+    }
+
+    requestAnimationFrame(loop);
+}
+
+// ── postMessage handler ───────────────────────────────────────────────────────
+window.addEventListener('message', function(e) {
+    const data = e.data;
+
+    // Init from app.html
+    if (data.document === 'init' && data.source === 'app') {
+        bossHp       = BOSS_HP_MAX;
+        playerHp     = PLAYER_HP_MAX;
+        gameResult   = null;
+        bossAttacking = false;
+        bossShake    = 0;
+        hitNums      = [];
+        slashes      = [];
+        flashes      = [];
+        partyBits    = [];
+        swordTrail   = [];
+        lastAtkTime  = Date.now() + START_GRACE;
+        gameActive   = true;
+    }
+
+    // Real-time pose data
+    if (data.pose) {
+        pose = data.pose.keypoints || data.pose;
+    }
+
+    // Jump event → attack boss
+    if (data.jump !== undefined && gameActive && !gameResult) {
+        const W = canvas.width, H = canvas.height;
+
+        // Parry if boss was attacking
+        if (bossAttacking) {
+            bossAttacking = false;
+            lastAtkTime   = Date.now();
+            hitNums.push({ x: W / 2, y: H * 0.36, text: '✦ PARRY! ✦', color: '#ff0', life: 1, vy: -2 });
+            flashes.push({ color: 'rgba(255,255,0,0.2)', life: 1 });
+        }
+
+        // Deal damage
+        const dmg = JUMP_DMG_BASE + Math.floor(Math.random() * JUMP_DMG_VAR);
+        bossHp = Math.max(0, bossHp - dmg);
+        bossShake = 18 * (Math.random() > 0.5 ? 1 : -1);
+
+        // Effects
+        const bossX = W / 2, bossY = H * 0.21;
+        slashes.push({
+            x:     bossX + rndPm(50),
+            y:     bossY + rndPm(35),
+            angle: rndPm(0.8),
+            life:  1,
+        });
+        hitNums.push({
+            x: bossX + rndPm(70),
+            y: bossY - 30 - rnd(30),
+            text:  `-${dmg}`,
+            color: '#ffaa00',
+            life:  1,
+            vy:    -1.8,
+        });
+
+        if (bossHp <= 0) {
+            gameResult = 'win';
+            spawnConfetti(W, H);
+        }
+    }
+});
+
+// Signal ready to app.html
+window.parent.postMessage({ action: 'ready', source: 'gameset' }, '*');
+
+// Start render loop
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>

@@ -1,0 +1,904 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>JumpRhythm PoC</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            background: #000;
+            overflow: hidden;
+            width: 100vw; height: 100vh;
+            font-family: 'Segoe UI', system-ui, sans-serif;
+            color: #fff;
+        }
+        #video   { display: none; }
+        #canvas  { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
+
+        /* Status overlay (loading / calibration) */
+        #overlay {
+            position: absolute; inset: 0;
+            display: flex; flex-direction: column;
+            align-items: center; justify-content: center;
+            background: rgba(0,0,0,0.75);
+            z-index: 10;
+            text-align: center;
+            gap: 16px;
+            transition: opacity 0.5s;
+        }
+        #overlay.hidden { opacity: 0; pointer-events: none; }
+        #overlay h1  { font-size: clamp(24px, 5vw, 42px); font-weight: 900; color: #a0f; }
+        #overlay p   { font-size: clamp(14px, 2.5vw, 20px); color: #ccc; max-width: 480px; line-height: 1.5; }
+        .btn-big {
+            padding: 14px 36px;
+            font-size: clamp(15px, 2.5vw, 20px); font-weight: 700;
+            background: linear-gradient(135deg, #6600cc, #aa00ff);
+            border: none; border-radius: 50px; color: #fff; cursor: pointer;
+            box-shadow: 0 4px 20px rgba(150,0,255,0.5);
+        }
+        .btn-big:hover { filter: brightness(1.15); }
+        .source-btns { display: flex; gap: 16px; flex-wrap: wrap; justify-content: center; }
+        .btn-source {
+            padding: 18px 32px;
+            font-size: clamp(15px, 2.5vw, 19px); font-weight: 700;
+            background: rgba(80,0,140,0.5);
+            border: 2px solid rgba(160,0,255,0.5); border-radius: 14px;
+            color: #ddd; cursor: pointer; transition: background 0.15s, border-color 0.15s;
+            min-width: 160px;
+        }
+        .btn-source:hover { background: rgba(120,0,200,0.7); border-color: rgba(200,0,255,0.9); color: #fff; }
+        #calibBar {
+            width: 280px; height: 10px;
+            background: rgba(255,255,255,0.15); border-radius: 5px; overflow: hidden;
+        }
+        #calibFill {
+            height: 100%; width: 0%;
+            background: linear-gradient(90deg, #6600cc, #aa00ff);
+            border-radius: 5px; transition: width 0.1s linear;
+        }
+        #debugPanel {
+            position: absolute; bottom: 8px; left: 8px;
+            font-size: 11px; color: rgba(255,255,255,0.45);
+            font-family: monospace; pointer-events: none; z-index: 5;
+            line-height: 1.6;
+        }
+    </style>
+
+    <!-- TF.js (proxied from form-data.cz → same origin as localhost:8080) -->
+    <script src="/app/svihej-camapp/v2025-july-mux/dist/tfjs-movenet/tfjs-core@4.9.0.js"></script>
+    <script src="/app/svihej-camapp/v2025-july-mux/dist/tfjs-movenet/tfjs-converter@4.9.0.js"></script>
+    <script src="/app/svihej-camapp/v2025-july-mux/dist/tfjs-movenet/tfjs-backend-webgl@4.9.0.js"></script>
+    <script src="/app/svihej-camapp/v2025-july-mux/dist/tfjs-movenet/pose-detection@2.1.0.js"></script>
+</head>
+<body>
+
+<video id="video" autoplay muted playsinline></video>
+<canvas id="canvas"></canvas>
+
+<!-- Status / calibration overlay -->
+<div id="overlay">
+    <h1 id="overlayTitle">JumpRhythm</h1>
+    <p  id="overlayText">Vyber zdroj obrazu:</p>
+    <div class="source-btns" id="sourcePicker">
+        <button class="btn-source" onclick="chooseSource('camera')">📷 Kamera</button>
+        <button class="btn-source" onclick="chooseSource('video')">🎬 Video</button>
+    </div>
+    <div id="calibBar" style="display:none"><div id="calibFill"></div></div>
+    <button class="btn-big" id="btnStart" style="display:none" onclick="startGame()">▶ Spustit hru</button>
+</div>
+
+<div id="debugPanel"></div>
+
+<script>
+'use strict';
+
+// ════════════════════════════════════════════════════════════════
+//  KEYPOINT INDICES (MoveNet 17-point)
+// ════════════════════════════════════════════════════════════════
+const KP = {
+    nose:0, leftEye:1, rightEye:2, leftEar:3, rightEar:4,
+    leftShoulder:5, rightShoulder:6,
+    leftElbow:7, rightElbow:8,
+    leftWrist:9, rightWrist:10,
+    leftHip:11, rightHip:12,
+    leftKnee:13, rightKnee:14,
+    leftAnkle:15, rightAnkle:16,
+};
+const SKEL = [
+    [KP.leftShoulder,KP.rightShoulder],[KP.leftShoulder,KP.leftElbow],
+    [KP.leftElbow,KP.leftWrist],[KP.rightShoulder,KP.rightElbow],
+    [KP.rightElbow,KP.rightWrist],[KP.leftShoulder,KP.leftHip],
+    [KP.rightShoulder,KP.rightHip],[KP.leftHip,KP.rightHip],
+    [KP.leftHip,KP.leftKnee],[KP.leftKnee,KP.leftAnkle],
+    [KP.rightHip,KP.rightKnee],[KP.rightKnee,KP.rightAnkle],
+];
+
+// ════════════════════════════════════════════════════════════════
+//  JUMP DETECTOR — exact port of svihej detectJump() / classes.js
+//
+//  Mirrors the original algorithm precisely:
+//  - SMA (not EMA) over last p≈5 frames for dhipyavg
+//  - Both sign transitions tracked with Math.sign()
+//  - Sign DECREASE (+→-) = push-off:  computes hipDownDrvInt, validates, fires jump
+//  - Sign INCREASE (-→+) = apex:      computes hipUpDrvInt
+//  - Validation: KhipDrv∈(35,371), Khipdiff∈(0.3,1.6), timing, body-size, legs
+//  - Trim: d.pop() every frame when d.length > 8 (outside both sign blocks)
+// ════════════════════════════════════════════════════════════════
+class JumpDetector {
+    // mirrors UserData.values
+    TIME_MIN  = 100;   // ms — min half-period
+    TIME_MAX  = 650;   // ms — max half-period
+    MIN_SCORE = 0.25;
+
+    // internal arrays
+    h = [];   // historyMoves  — newest at index 0
+    d = [];   // historyPeaksSteps
+
+    // integrals
+    hipUpDrvInt   = 0;
+    hipDownDrvInt = 0;
+
+    // flags
+    KhipdiffTopLimitSet = false;   // false or 2.2
+
+    // calibration
+    baseline        = 0.5;
+    calibSamples    = [];
+    calibrating     = false;
+    calibDurationMs = 2000;
+
+    visible = false;
+    state   = 'idle';   // 'idle' | 'rising' | 'calibrating'
+
+    // debug panel
+    dbg = { KhipDrv: 0, Khipdiff: 0, timeUp: 0, timeDown: 0, ratio: 0, reject: '' };
+
+    // SMA helper — exact replica of original _sum(t,a,e)
+    _sum(arr, key, n) {
+        const len = Math.min(arr.length, n);
+        let s = 0;
+        for (let i = 0; i < len; i++) s += arr[i][key];
+        return s;
+    }
+
+    startCalibration() {
+        this.calibrating = true; this.calibSamples = []; this.h = []; this.d = [];
+    }
+    finishCalibration() {
+        if (this.calibSamples.length)
+            this.baseline = this.calibSamples.reduce((a,b)=>a+b,0) / this.calibSamples.length;
+        this.calibrating = false;
+    }
+
+    detect(keypoints) {
+        const lh = keypoints[KP.leftHip],      rh = keypoints[KP.rightHip];
+        const ls = keypoints[KP.leftShoulder],  rs = keypoints[KP.rightShoulder];
+        const la = keypoints[KP.leftAnkle],     ra = keypoints[KP.rightAnkle];
+        const lk = keypoints[KP.leftKnee],      rk = keypoints[KP.rightKnee];
+
+        const minScore = Math.min(lh.score, rh.score, ls.score, rs.score);
+        this.visible = minScore >= this.MIN_SCORE;
+        if (!this.visible)
+            return { jump:false, visible:false, hipy:this.baseline, dhipyAvg:0, state:this.state };
+
+        // SMA window — original: Math.round(5 * fpsAverage/fpsMax + 0.3) ≈ 5 at 30fps
+        const p = 5;
+
+        // tallDimension m — same formula as original, per-frame normalized value
+        const m = Math.max(ra.y, la.y) - (ls.y + rs.y) / 2;
+
+        // Leg asymmetry → widen Khipdiff limit (original: KhipdiffTopLimitSet = 2.2)
+        const legDiffL = lh.y - lk.y,  legDiffR = rh.y - rk.y;
+        if (legDiffL > 0 && legDiffR > 0 &&
+            1.1 < Math.max(legDiffL/legDiffR, legDiffR/legDiffL))
+            this.KhipdiffTopLimitSet = 2.2;
+
+        // Push new history entry (h.unshift — newest first)
+        this.h.unshift({
+            hipy:  0, dhipy: 0, dhipyavg: 0,
+            hiply: lh.y, hipry: rh.y,
+            shly:  ls.y, shry:  rs.y,
+            knly:  lk.y, knry:  rk.y,
+            anly:  la.y, anry:  ra.y,
+            time:  Date.now(),
+        });
+
+        // Central signal — exact replica
+        this.h[0].hipy = (lh.y + rh.y + ls.y + rs.y) / 4;
+
+        if (this.calibrating) {
+            this.calibSamples.push(this.h[0].hipy);
+            return { jump:false, visible:true, hipy:this.h[0].hipy, dhipyAvg:0, state:'calibrating' };
+        }
+
+        // dhipy and dhipyavg — exact replica
+        this.h[0].dhipy    = this.h[1] ? this.h[0].hipy - this.h[1].hipy : 0;
+        this.h[0].dhipyavg = this._sum(this.h, 'dhipy', p) / p;
+
+        if (60 <= this.h.length) this.h.pop();
+
+        // Increment all peak frame counters — exact replica
+        for (let i = 0; i < this.d.length; i++) this.d[i].frame++;
+
+        const now     = Date.now();
+        const cur     = this.h[0].dhipyavg;
+        const prev    = this.h[1] ? this.h[1].dhipyavg : 0;
+        this.state    = cur < 0 ? 'rising' : 'idle';
+        let jumped    = false;
+
+        // ── SIGN DECREASE (+→-): push-off ────────────────────────
+        // Fires when body stops falling and starts rising (person pushes off floor)
+        if (Math.sign(cur) < Math.sign(prev)) {
+
+            if (this.d[0]) {
+                let peakVal = 0, peakFrame = 0;
+                this.hipDownDrvInt = 0;
+                for (let e = 1; e <= this.d[0].frame; e++) {
+                    if (this.h[e] && this.h[e].dhipyavg > peakVal) {
+                        peakVal = this.h[e].dhipyavg; peakFrame = e;
+                    }
+                    this.hipDownDrvInt += this.h[e] ? this.h[e].dhipyavg : 0;
+                }
+                this.d.unshift({ type:3, frame:peakFrame, value:peakVal });
+            }
+            this.d.unshift({ type:0, frame:0, time:now });
+
+            // ── Validation (mirrors original conditions exactly) ──
+            let tUp = 0, tDown = 0;
+            if (this.d[4]) {
+                tUp   = this.d[2].time - this.d[4].time;
+                tDown = this.d[0].time - this.d[2].time;
+            }
+            const Kratio    = tUp / tDown;
+            const timeOk    = (tUp + tDown) > 2 * this.TIME_MIN;
+            const timeLim   = (tUp + tDown) < 2 * this.TIME_MAX;
+            const Khipdiff  = Math.abs(this.hipDownDrvInt / this.hipUpDrvInt);
+            const KdiffLim  = this.KhipdiffTopLimitSet || 2.1;
+            const KhipDrv   = (this.hipDownDrvInt - this.hipUpDrvInt) /
+                              ((tUp + tDown) * 30 * m) * 1e7;
+
+            this.dbg = {
+                KhipDrv: +KhipDrv.toFixed(1), Khipdiff: +Khipdiff.toFixed(3),
+                timeUp: tUp, timeDown: tDown, ratio: +Kratio.toFixed(2), reject: '',
+            };
+
+            if (20 < KhipDrv && KhipDrv < 371 &&
+                timeOk && timeLim &&
+                0.3 < Khipdiff && Khipdiff < KdiffLim &&
+                0.5 < Kratio   && Kratio   < 1.6) {
+
+                this.KhipdiffTopLimitSet = false;
+                let abort = false, reason = '';
+
+                // Leg straightness — (kneeY-hipY)/(ankleY-hipY)*m*1000 >= 20
+                const legL = (lk.y-lh.y) / Math.max(0.001, la.y-lh.y) * m * 1e3;
+                const legR = (rk.y-rh.y) / Math.max(0.001, ra.y-rh.y) * m * 1e3;
+                if (legL < 20 || legR < 20) { abort=true; reason=`legs_crouched(${Math.min(legL,legR).toFixed(0)})`; }
+
+                // Leg keypoints must be below hips (y increases downward)
+                if (!abort && (lh.y > lk.y || lh.y > la.y || rh.y > rk.y || rh.y > ra.y))
+                    { abort=true; reason='leg_above_hip'; }
+
+                // Body too big (person too close to camera)
+                if (!abort && (lh.y-ls.y > 0.28 || rh.y-rs.y > 0.28))
+                    { abort=true; reason='body_too_big'; }
+
+                // Body too small (person too far)
+                if (!abort && (lh.y-ls.y < 0.05 || rh.y-rs.y < 0.05))
+                    { abort=true; reason='body_too_small'; }
+
+                if (!abort) {
+                    jumped = true;
+                } else {
+                    this.dbg.reject = reason;
+                }
+            } else {
+                if      (!(20 < KhipDrv && KhipDrv < 371))            this.dbg.reject = `KhipDrv=${KhipDrv.toFixed(0)}`;
+                else if (!timeOk)                                       this.dbg.reject = `tShort=${tUp+tDown}ms`;
+                else if (!timeLim)                                      this.dbg.reject = `tLong=${tUp+tDown}ms`;
+                else if (!(0.3 < Khipdiff && Khipdiff < KdiffLim))    this.dbg.reject = `Kdiff=${Khipdiff.toFixed(3)}`;
+                else if (!(0.5 < Kratio   && Kratio   < 1.6))         this.dbg.reject = `Kratio=${Kratio.toFixed(2)}`;
+            }
+        }
+
+        // ── SIGN INCREASE (-→+): apex ─────────────────────────────
+        // Fires when body stops rising and starts falling (at jump apex)
+        if (Math.sign(cur) > Math.sign(prev)) {
+            if (this.d[0]) {
+                let peakVal = 0, peakFrame = 0;
+                this.hipUpDrvInt = 0;
+                for (let e = 1; e <= this.d[0].frame; e++) {
+                    if (this.h[e] && this.h[e].dhipyavg < peakVal) {
+                        peakVal = this.h[e].dhipyavg; peakFrame = e;
+                    }
+                    this.hipUpDrvInt += this.h[e] ? this.h[e].dhipyavg : 0;
+                }
+                this.d.unshift({ type:1, frame:peakFrame, value:peakVal });
+            }
+            this.d.unshift({ type:2, frame:0, time:now });
+        }
+
+        // Trim — outside both blocks, every frame (exact replica: 8 < d.length && d.pop())
+        if (8 < this.d.length) this.d.pop();
+
+        return { jump:jumped, visible:true, hipy:this.h[0].hipy, dhipyAvg:cur, state:this.state };
+    }
+}
+
+// ════════════════════════════════════════════════════════════════
+//  RHYTHM GAME
+// ════════════════════════════════════════════════════════════════
+class RhythmGame {
+    // ── Timing ────────────────────────────────────────────────
+    bpm           = 62;
+    NOTE_TRAVEL_MS = 1800;    // ms for note to fall from spawn to hit zone
+    HIT_ZONE_REL   = 0.82;    // relative Y in game area where hit zone sits
+    HIT_WINDOW_PERFECT = 90;  // ms ±
+    HIT_WINDOW_GOOD    = 260; // ms ±
+
+    // ── Scoring ───────────────────────────────────────────────
+    score   = 0;
+    combo   = 0;
+    maxCombo = 0;
+    hits    = { perfect: 0, good: 0, miss: 0 };
+
+    // ── State ─────────────────────────────────────────────────
+    notes    = [];    // { spawnMs, hitMs (when it should be at hit zone), hit: null/'p'/'g'/'m' }
+    feedback = [];    // { text, color, life, y }
+
+    startMs  = 0;
+    running  = false;
+
+    // ── BPM progression ───────────────────────────────────────
+    nextBeatMs     = 0;
+    patternIndex   = 0;
+    beatInPattern  = 0;
+
+    // Patterns: 1 = note, 0 = rest. Each value = one beat.
+    PATTERNS = [
+        [1,0,1,0, 1,0,1,0],           // half time — one every 2 beats
+        [1,0,1,0, 1,0,0,1],
+        [1,1,0,1, 0,1,0,1],
+        [1,0,1,1, 0,1,1,0],           // busier
+        [1,1,1,0, 1,0,1,1],
+        [1,1,0,1, 1,1,0,1],           // hard
+        [1,0,1,1, 1,1,0,1, 1,0,1,0],
+    ];
+
+    // ── Layout ────────────────────────────────────────────────
+    // These are set in resize() based on canvas dimensions
+    laneX  = 0.5;   // relative center X
+    laneW  = 0;     // pixel width of lane
+    areaTop = 0;    // game area top Y (pixels)
+    areaH   = 0;    // game area height (pixels)
+
+    start(nowMs) {
+        this.startMs      = nowMs;
+        this.running      = true;
+        this.nextBeatMs   = nowMs + 500;  // short delay before first note
+        this.beatInPattern = 0;
+        this.patternIndex  = 0;
+    }
+
+    resize(W, H) {
+        this.laneW   = Math.min(160, W * 0.22);
+        this.laneX   = W / 2;
+        this.areaTop = H * 0.04;
+        this.areaH   = H * 0.90;
+    }
+
+    get beatIntervalMs() { return 60000 / this.bpm; }
+
+    get pattern() { return this.PATTERNS[Math.min(this.patternIndex, this.PATTERNS.length - 1)]; }
+
+    // Called on each frame — nowMs is current time
+    tick(nowMs, jumped) {
+        if (!this.running) return;
+
+        // ── Spawn notes ────────────────────────────────────────
+        while (nowMs >= this.nextBeatMs) {
+            const pat = this.pattern;
+            if (pat[this.beatInPattern % pat.length] === 1) {
+                this.notes.push({
+                    spawnMs: this.nextBeatMs,
+                    hitMs:   this.nextBeatMs + this.NOTE_TRAVEL_MS,
+                    hit:     null,
+                });
+            }
+            this.beatInPattern++;
+
+            // Pattern progression: advance every full pattern cycle
+            if (this.beatInPattern % pat.length === 0) {
+                const elapsed = nowMs - this.startMs;
+                // BPM ramps: every 20s add ~5 BPM up to 130
+                this.bpm = Math.min(130, 62 + Math.floor(elapsed / 20000) * 6);
+                // Pattern advances every 2 cycles
+                if (Math.floor(this.beatInPattern / pat.length) % 2 === 0) {
+                    this.patternIndex = Math.min(this.patternIndex + 1, this.PATTERNS.length - 1);
+                }
+            }
+
+            this.nextBeatMs += this.beatIntervalMs;
+        }
+
+        // ── Handle jump input ──────────────────────────────────
+        if (jumped) {
+            let bestNote = null, bestDelta = Infinity;
+            for (const n of this.notes) {
+                if (n.hit !== null) continue;
+                const delta = Math.abs(nowMs - n.hitMs);
+                if (delta < this.HIT_WINDOW_GOOD && delta < bestDelta) {
+                    bestDelta = delta;
+                    bestNote  = n;
+                }
+            }
+            if (bestNote) {
+                const delta = Math.abs(nowMs - bestNote.hitMs);
+                if (delta <= this.HIT_WINDOW_PERFECT) {
+                    bestNote.hit = 'p';
+                    this.score += 100 * (1 + Math.floor(this.combo / 5));
+                    this.combo++;
+                    this.hits.perfect++;
+                    this._addFeedback('PERFECT', '#ffe000', this.HIT_ZONE_REL);
+                } else {
+                    bestNote.hit = 'g';
+                    this.score += 50 * (1 + Math.floor(this.combo / 10));
+                    this.combo++;
+                    this.hits.good++;
+                    this._addFeedback('GOOD', '#44dd66', this.HIT_ZONE_REL);
+                }
+                this.maxCombo = Math.max(this.maxCombo, this.combo);
+            } else {
+                // Early/late jump — no note in window
+                this._addFeedback('EARLY?', '#aaa', this.HIT_ZONE_REL);
+            }
+        }
+
+        // ── Expire missed notes ────────────────────────────────
+        for (const n of this.notes) {
+            if (n.hit === null && nowMs > n.hitMs + this.HIT_WINDOW_GOOD + 100) {
+                n.hit = 'm';
+                this.combo = 0;
+                this.hits.miss++;
+                this._addFeedback('MISS', '#ff4444', this.HIT_ZONE_REL + 0.04);
+            }
+        }
+
+        // ── Remove old notes ───────────────────────────────────
+        this.notes = this.notes.filter(n => nowMs < n.hitMs + 800);
+
+        // ── Age feedback ───────────────────────────────────────
+        for (const f of this.feedback) { f.life -= 0.025; f.y -= 1.2; }
+        this.feedback = this.feedback.filter(f => f.life > 0);
+    }
+
+    _addFeedback(text, color, relY) {
+        this.feedback.push({ text, color, life: 1, y: this.areaTop + this.areaH * relY });
+    }
+
+    // ── Canvas rendering ──────────────────────────────────────
+    render(ctx, nowMs, W, H) {
+        const lx    = this.laneX;
+        const lw    = this.laneW;
+        const atop  = this.areaTop;
+        const ah    = this.areaH;
+        const hzY   = atop + ah * this.HIT_ZONE_REL;  // hit zone center Y (pixels)
+
+        // Lane background
+        ctx.fillStyle = 'rgba(0,0,0,0.45)';
+        ctx.beginPath();
+        ctx.roundRect(lx - lw/2, atop, lw, ah, 10);
+        ctx.fill();
+
+        // Lane border
+        ctx.strokeStyle = 'rgba(140,0,255,0.4)';
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.roundRect(lx - lw/2, atop, lw, ah, 10);
+        ctx.stroke();
+
+        // Hit zone bar
+        const pulse = 0.7 + 0.3 * Math.sin(Date.now() / 300);
+        ctx.fillStyle = `rgba(200,0,255,${0.18 * pulse})`;
+        ctx.fillRect(lx - lw/2 + 2, hzY - 18, lw - 4, 36);
+        ctx.strokeStyle = `rgba(200,0,255,${0.6 * pulse})`;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(lx - lw/2 + 2, hzY);
+        ctx.lineTo(lx + lw/2 - 2, hzY);
+        ctx.stroke();
+
+        // Horizontal tick marks on lane
+        const tickSpacing = ah * 0.25;
+        ctx.strokeStyle = 'rgba(255,255,255,0.06)';
+        ctx.lineWidth = 1;
+        for (let ty = atop + tickSpacing; ty < atop + ah; ty += tickSpacing) {
+            ctx.beginPath(); ctx.moveTo(lx - lw/2 + 4, ty); ctx.lineTo(lx + lw/2 - 4, ty); ctx.stroke();
+        }
+
+        // Draw notes
+        for (const n of this.notes) {
+            if (n.hit === 'm') continue;
+            const progress = (nowMs - n.spawnMs) / this.NOTE_TRAVEL_MS;
+            const ny = atop + progress * ah * this.HIT_ZONE_REL;
+            const nr = lw * 0.28;
+
+            let alpha = 1;
+            if (n.hit === 'p') alpha = Math.max(0, 1 - (nowMs - n.hitMs) / 300);
+            if (n.hit === 'g') alpha = Math.max(0, 1 - (nowMs - n.hitMs) / 300);
+
+            ctx.save();
+            ctx.globalAlpha = alpha;
+
+            // Glow
+            const grd = ctx.createRadialGradient(lx, ny, 0, lx, ny, nr * 1.8);
+            grd.addColorStop(0,   n.hit === 'p' ? 'rgba(255,230,0,0.4)' :
+                                  n.hit === 'g' ? 'rgba(0,220,80,0.3)' :
+                                                  'rgba(170,0,255,0.3)');
+            grd.addColorStop(1,   'rgba(0,0,0,0)');
+            ctx.fillStyle = grd;
+            ctx.beginPath(); ctx.arc(lx, ny, nr * 1.8, 0, Math.PI * 2); ctx.fill();
+
+            // Core
+            ctx.fillStyle = n.hit === 'p' ? '#ffe000' :
+                            n.hit === 'g' ? '#22ee66' : '#cc00ff';
+            ctx.shadowBlur  = 12;
+            ctx.shadowColor = ctx.fillStyle;
+            ctx.beginPath(); ctx.arc(lx, ny, nr, 0, Math.PI * 2); ctx.fill();
+            ctx.shadowBlur = 0;
+
+            ctx.restore();
+        }
+
+        // Jump feedback text
+        for (const f of this.feedback) {
+            ctx.save();
+            ctx.globalAlpha = f.life;
+            ctx.fillStyle   = f.color;
+            ctx.font        = `bold ${Math.floor(lw * 0.32)}px sans-serif`;
+            ctx.textAlign   = 'center';
+            ctx.shadowBlur  = 8; ctx.shadowColor = f.color;
+            ctx.fillText(f.text, lx, f.y);
+            ctx.restore();
+        }
+
+        // Score (top right)
+        ctx.fillStyle   = '#fff';
+        ctx.font        = `bold ${Math.floor(W * 0.055)}px sans-serif`;
+        ctx.textAlign   = 'right';
+        ctx.shadowBlur  = 6; ctx.shadowColor = '#a0f';
+        ctx.fillText(this.score.toString().padStart(6, '0'), W - 16, 44);
+        ctx.shadowBlur = 0;
+        ctx.font      = `${Math.floor(W * 0.03)}px sans-serif`;
+        ctx.fillStyle = '#aaa';
+        ctx.fillText(`${this.bpm} BPM`, W - 16, 66);
+
+        // Combo (top left)
+        if (this.combo > 1) {
+            ctx.fillStyle   = '#ffe000';
+            ctx.font        = `bold ${Math.floor(W * 0.045)}px sans-serif`;
+            ctx.textAlign   = 'left';
+            ctx.shadowBlur  = 8; ctx.shadowColor = '#ff8800';
+            ctx.fillText(`${this.combo}×`, 16, 44);
+            ctx.shadowBlur = 0;
+        }
+    }
+}
+
+// ════════════════════════════════════════════════════════════════
+//  SKELETON RENDERER
+// ════════════════════════════════════════════════════════════════
+function drawSkeleton(ctx, kps, vr, alpha, rgb = '80,200,255') {
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.lineCap = 'round';
+
+    for (const [a, b] of SKEL) {
+        const pa = kps[a], pb = kps[b];
+        if (!pa || !pb || pa.score < 0.3 || pb.score < 0.3) continue;
+        ctx.strokeStyle = `rgba(${rgb},0.8)`;
+        ctx.lineWidth   = Math.max(1.5, vr.w * 0.003);
+        ctx.beginPath();
+        ctx.moveTo(pa.x * vr.w + vr.x, pa.y * vr.h + vr.y);
+        ctx.lineTo(pb.x * vr.w + vr.x, pb.y * vr.h + vr.y);
+        ctx.stroke();
+    }
+
+    for (let i = 0; i < kps.length; i++) {
+        const kp = kps[i];
+        if (!kp || kp.score < 0.3) continue;
+        ctx.beginPath();
+        ctx.arc(kp.x * vr.w + vr.x, kp.y * vr.h + vr.y, Math.max(3, vr.w * 0.005), 0, Math.PI * 2);
+        ctx.fillStyle = i < 5 ? 'rgba(255,220,50,0.9)' : `rgba(${rgb},0.9)`;
+        ctx.fill();
+    }
+    ctx.restore();
+}
+
+// ════════════════════════════════════════════════════════════════
+//  GLOBAL STATE
+// ════════════════════════════════════════════════════════════════
+const video    = document.getElementById('video');
+const canvas   = document.getElementById('canvas');
+const ctx      = canvas.getContext('2d');
+const overlay  = document.getElementById('overlay');
+const debugEl  = document.getElementById('debugPanel');
+
+let detector   = null;   // TF.js pose detector
+let jump_det   = new JumpDetector();
+let game       = new RhythmGame();
+let phase      = 'source';   // source | loading | calibrating | ready | playing
+let latestKps  = null;
+let calibStartMs = 0;
+let frameCount = 0;
+let jumpCount  = 0;
+let videoSrc   = null;       // null = camera, string = video file path
+let lastJumpFlashMs = 0;     // timestamp of last detected jump (for persistent visual)
+let videoRect  = { x: 0, y: 0, w: 1, h: 1 };  // letterboxed draw rect for video
+
+function computeVideoRect() {
+    const W = canvas.width, H = canvas.height;
+    const vW = video.videoWidth  || W;
+    const vH = video.videoHeight || H;
+    const scale = Math.min(W / vW, H / vH);
+    const drawW = vW * scale;
+    const drawH = vH * scale;
+    videoRect = { x: (W - drawW) / 2, y: (H - drawH) / 2, w: drawW, h: drawH };
+}
+
+function resize() {
+    canvas.width  = window.innerWidth;
+    canvas.height = window.innerHeight;
+    computeVideoRect();
+    game.resize(canvas.width, canvas.height);
+}
+window.addEventListener('resize', resize);
+video.addEventListener('loadedmetadata', computeVideoRect);
+resize();
+
+// ════════════════════════════════════════════════════════════════
+//  CAMERA
+// ════════════════════════════════════════════════════════════════
+async function initCamera() {
+    if (videoSrc) {
+        video.src   = videoSrc;
+        video.loop  = true;
+        video.muted = true;
+        video.play().catch(() => {});
+        return new Promise(resolve => { video.onloadeddata = resolve; });
+    }
+    try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } },
+            audio: false,
+        });
+        video.srcObject = stream;
+        return new Promise(resolve => { video.onloadeddata = resolve; });
+    } catch (err) {
+        document.getElementById('overlayText').textContent = 'Chyba kamery: ' + err.message;
+        throw err;
+    }
+}
+
+// ════════════════════════════════════════════════════════════════
+//  POSE DETECTOR (MoveNet Lightning)
+// ════════════════════════════════════════════════════════════════
+async function initDetector() {
+    tf.ENV.set('WEBGL_PACK', false);
+    await tf.ready();
+    await tf.setBackend('webgl');
+    return await poseDetection.createDetector(
+        poseDetection.SupportedModels.MoveNet,
+        {
+            modelType: poseDetection.movenet.modelType.SINGLEPOSE_LIGHTNING,
+            enableTracking: false,
+            modelUrl: '/app/svihej-camapp/v2025-july-mux/dist/tfjs-movenet/model.json',
+        }
+    );
+}
+
+// ════════════════════════════════════════════════════════════════
+//  CALIBRATION
+// ════════════════════════════════════════════════════════════════
+function startCalibration() {
+    phase = 'calibrating';
+    calibStartMs = Date.now();
+    jump_det.startCalibration();
+    document.getElementById('overlayTitle').textContent = 'Stůj klidně…';
+    document.getElementById('overlayText').textContent  = 'Kalibrace – 2 sekundy v klidu nastaví výchozí polohu těla.';
+    document.getElementById('calibBar').style.display   = 'block';
+    document.getElementById('btnStart').style.display   = 'none';
+}
+
+function finishCalibration() {
+    jump_det.finishCalibration();
+    phase = 'ready';
+    document.getElementById('calibBar').style.display   = 'none';
+    document.getElementById('overlayTitle').textContent = 'Připraven!';
+    document.getElementById('overlayText').textContent  = `Baseline: ${jump_det.baseline.toFixed(3)}. Skoky budou detekovány. Spusť hru a skákej v rytmu!`;
+    document.getElementById('btnStart').style.display   = 'inline-block';
+}
+
+function startGame() {
+    phase = 'playing';
+    overlay.classList.add('hidden');
+    game.start(Date.now());
+}
+
+// ════════════════════════════════════════════════════════════════
+//  MAIN LOOP
+// ════════════════════════════════════════════════════════════════
+let poseEstimating = false;
+
+async function poseLoop() {
+    if (poseEstimating || !detector || video.readyState < 2) {
+        requestAnimationFrame(poseLoop);
+        return;
+    }
+    poseEstimating = true;
+
+    try {
+        const poses = await detector.estimatePoses(video, { flipHorizontal: true });
+        if (poses.length > 0) {
+            const vW = video.videoWidth  || 640;
+            const vH = video.videoHeight || 480;
+            latestKps = poses[0].keypoints.map(kp => ({
+                ...kp,
+                x: kp.x / vW,
+                y: kp.y / vH,
+            }));
+        }
+    } catch(_) {}
+
+    poseEstimating = false;
+    requestAnimationFrame(poseLoop);
+}
+
+function renderLoop() {
+    const now = Date.now();
+    const W = canvas.width, H = canvas.height;
+
+    // ── Draw mirrored video feed (letterboxed to maintain aspect ratio) ──
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, W, H);
+    if (video.readyState >= 2) {
+        const vr = videoRect;
+        ctx.save();
+        ctx.scale(-1, 1);
+        ctx.drawImage(video, -(vr.x + vr.w), vr.y, vr.w, vr.h);
+        ctx.restore();
+        // Dark vignette over the video area
+        const vig = ctx.createRadialGradient(W/2,H/2,H*0.25, W/2,H/2,H*0.75);
+        vig.addColorStop(0, 'rgba(0,0,0,0)');
+        vig.addColorStop(1, 'rgba(0,0,0,0.45)');
+        ctx.fillStyle = vig;
+        ctx.fillRect(0, 0, W, H);
+    }
+
+    // ── Calibration progress ──────────────────────────────────
+    if (phase === 'calibrating') {
+        const elapsed = now - calibStartMs;
+        const pct = Math.min(100, (elapsed / jump_det.calibDurationMs) * 100);
+        document.getElementById('calibFill').style.width = pct + '%';
+        if (elapsed >= jump_det.calibDurationMs) finishCalibration();
+    }
+
+    // ── Pose detection + jump logic ───────────────────────────
+    let jumpFired = false;
+    if (latestKps) {
+        const result = jump_det.detect(latestKps);
+        if (result.visible) {
+            // Draw skeleton (faint in background)
+            const skelAlpha = phase === 'playing' ? 0.28 : 0.55;
+            // Skeleton: cyan normally, yellow-green while rising
+            const skelColor = result.state === 'rising' ? '180,255,80' : '80,200,255';
+            drawSkeleton(ctx, latestKps, videoRect, skelAlpha, skelColor);
+
+            // Rising glow — more visible
+            if (result.state === 'rising') {
+                const jG = ctx.createRadialGradient(W/2, H*0.5, 0, W/2, H*0.5, H*0.55);
+                jG.addColorStop(0, 'rgba(140,255,60,0.13)');
+                jG.addColorStop(1, 'rgba(0,0,0,0)');
+                ctx.fillStyle = jG;
+                ctx.fillRect(0, 0, W, H);
+            }
+        }
+
+        if (result.jump) {
+            jumpFired = true;
+            lastJumpFlashMs = now;
+            jumpCount++;
+        }
+
+        // ── Persistent jump flash (fades over 500ms) ──────────────
+        const flashAge = now - lastJumpFlashMs;
+        if (flashAge < 500) {
+            const t = 1 - flashAge / 500;
+            // Edge glow
+            const eg = ctx.createRadialGradient(W/2, H/2, H*0.1, W/2, H/2, H*0.7);
+            eg.addColorStop(0, 'rgba(0,0,0,0)');
+            eg.addColorStop(1, `rgba(255,220,80,${0.55 * t})`);
+            ctx.fillStyle = eg;
+            ctx.fillRect(0, 0, W, H);
+            // "JUMP!" text
+            const fontSize = Math.floor(W * 0.13);
+            ctx.save();
+            ctx.globalAlpha = t;
+            ctx.font        = `900 ${fontSize}px sans-serif`;
+            ctx.textAlign   = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.shadowBlur  = 40;
+            ctx.shadowColor = '#ffcc00';
+            ctx.fillStyle   = '#fff';
+            ctx.fillText('JUMP!', W / 2, H * 0.38);
+            ctx.restore();
+        }
+
+        // Debug panel
+        if (debugEl) {
+            const d = jump_det.dbg;
+            debugEl.innerHTML =
+                `hipy:<b>${result.hipy.toFixed(3)}</b>  base:${jump_det.baseline.toFixed(3)}  ` +
+                `dhipyavg:<b>${result.dhipyAvg.toFixed(4)}</b>  state:<b>${result.state}</b><br>` +
+                `tUp:${d.timeUp}ms  tDown:${d.timeDown}ms  ratio:${d.ratio}  ` +
+                `KhipDrv:<b>${d.KhipDrv}</b>  Kdiff:${d.Khipdiff}  d:${jump_det.d.length}<br>` +
+                `reject:<b style="color:#f88">${d.reject || '—'}</b>  frames:${++frameCount}`;
+        }
+    }
+
+    // ── Game tick + render ────────────────────────────────────
+    if (phase === 'playing') {
+        game.tick(now, jumpFired);
+        game.render(ctx, now, W, H);
+    }
+
+    // ── Jump counter (always visible once detection starts) ───
+    if (phase === 'playing' || phase === 'ready' || phase === 'calibrating') {
+        const sz = Math.max(22, W * 0.038);
+        ctx.save();
+        ctx.font        = `900 ${sz}px sans-serif`;
+        ctx.textAlign   = 'left';
+        ctx.textBaseline = 'top';
+        ctx.shadowBlur  = 10;
+        ctx.shadowColor = '#00ccff';
+        ctx.fillStyle   = '#fff';
+        ctx.fillText(`⬆ ${jumpCount}`, 16, 12);
+        ctx.restore();
+    }
+
+    requestAnimationFrame(renderLoop);
+}
+
+// ════════════════════════════════════════════════════════════════
+//  INIT
+// ════════════════════════════════════════════════════════════════
+async function chooseSource(src) {
+    videoSrc = src === 'video' ? '/test-video.mp4' : null;
+    document.getElementById('sourcePicker').style.display = 'none';
+    phase = 'loading';
+
+    try {
+        document.getElementById('overlayText').textContent = 'Spouštím ' + (videoSrc ? 'video' : 'kameru') + '…';
+        await initCamera();
+        document.getElementById('overlayText').textContent = 'Načítám MoveNet…';
+        detector = await initDetector();
+        document.getElementById('overlayText').textContent = 'Hotovo! Spustím kalibraci…';
+        await new Promise(r => setTimeout(r, 600));
+
+        requestAnimationFrame(poseLoop);
+        requestAnimationFrame(renderLoop);
+
+        await new Promise(r => setTimeout(r, 400));
+        startCalibration();
+    } catch(err) {
+        console.error(err);
+        document.getElementById('overlayText').textContent = 'Chyba: ' + err.message;
+    }
+}
+
+// Start render loop immediately so background is black while waiting for source choice
+requestAnimationFrame(renderLoop);
+</script>
+</body>
+</html>

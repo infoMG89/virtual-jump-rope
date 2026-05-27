@@ -1,0 +1,330 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Svihej – Boss Fight</title>
+    <style>
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            font-family: 'Segoe UI', system-ui, sans-serif;
+            background: #0a0014;
+            color: #e8e0f0;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        /* ── Header ───────────────────────────────────────────────── */
+        header {
+            width: 100%;
+            padding: 20px 24px;
+            display: flex;
+            align-items: center;
+            gap: 14px;
+            border-bottom: 1px solid rgba(150, 0, 255, 0.2);
+            background: rgba(20, 0, 40, 0.9);
+        }
+        .logo { font-size: 26px; font-weight: 900; color: #bf00ff; letter-spacing: -1px; }
+        .tagline { font-size: 13px; color: #888; margin-top: 2px; }
+
+        /* ── Main layout ──────────────────────────────────────────── */
+        main {
+            width: 100%;
+            max-width: 640px;
+            padding: 32px 20px 60px;
+            display: flex;
+            flex-direction: column;
+            gap: 24px;
+        }
+
+        /* ── Hero card ────────────────────────────────────────────── */
+        .hero {
+            background: linear-gradient(135deg, #1a0030 0%, #300050 60%, #200040 100%);
+            border: 1px solid rgba(180, 0, 255, 0.3);
+            border-radius: 16px;
+            padding: 28px 24px;
+            text-align: center;
+            position: relative;
+            overflow: hidden;
+        }
+        .hero::before {
+            content: '';
+            position: absolute;
+            inset: 0;
+            background: radial-gradient(circle at 50% 30%, rgba(150,0,255,0.12), transparent 70%);
+        }
+        .boss-icon { font-size: 64px; line-height: 1; margin-bottom: 12px; }
+        .hero h1 { font-size: 28px; font-weight: 900; color: #e0b0ff; margin-bottom: 8px; }
+        .hero p  { font-size: 15px; color: #a888cc; line-height: 1.5; max-width: 360px; margin: 0 auto 20px; }
+
+        .btn-start {
+            display: inline-block;
+            padding: 15px 40px;
+            background: linear-gradient(135deg, #8800cc, #cc00ff);
+            color: #fff;
+            font-size: 18px;
+            font-weight: 700;
+            border: none;
+            border-radius: 50px;
+            cursor: pointer;
+            text-shadow: 0 1px 4px rgba(0,0,0,0.5);
+            box-shadow: 0 4px 24px rgba(180,0,255,0.4);
+            transition: transform 0.12s, box-shadow 0.12s;
+        }
+        .btn-start:hover  { transform: translateY(-2px); box-shadow: 0 8px 32px rgba(200,0,255,0.5); }
+        .btn-start:active { transform: translateY(0); }
+
+        /* ── Stats row ────────────────────────────────────────────── */
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 12px;
+        }
+        .stat-card {
+            background: rgba(40, 0, 70, 0.6);
+            border: 1px solid rgba(120, 0, 200, 0.25);
+            border-radius: 12px;
+            padding: 14px 12px;
+            text-align: center;
+        }
+        .stat-value { font-size: 28px; font-weight: 900; color: #d070ff; }
+        .stat-label { font-size: 11px; color: #888; text-transform: uppercase; letter-spacing: 0.05em; margin-top: 4px; }
+
+        /* ── How to play ──────────────────────────────────────────── */
+        .how {
+            background: rgba(20, 0, 35, 0.6);
+            border: 1px solid rgba(100, 0, 160, 0.2);
+            border-radius: 14px;
+            padding: 20px 20px;
+        }
+        .how h2 { font-size: 14px; font-weight: 700; color: #bf80ff; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 14px; }
+        .how-steps { display: flex; flex-direction: column; gap: 10px; }
+        .step {
+            display: flex;
+            align-items: flex-start;
+            gap: 12px;
+            font-size: 14px;
+            line-height: 1.4;
+        }
+        .step-icon { font-size: 20px; flex-shrink: 0; margin-top: 1px; }
+        .step-text { color: #c0a8e0; }
+        .step-text strong { color: #e8d0ff; }
+
+        /* ── Last result card ─────────────────────────────────────── */
+        .result-card {
+            background: rgba(0, 20, 0, 0.5);
+            border: 1px solid rgba(0, 200, 80, 0.3);
+            border-radius: 14px;
+            padding: 18px 20px;
+            display: none;
+        }
+        .result-card.visible { display: block; }
+        .result-card.lose {
+            background: rgba(40, 0, 0, 0.5);
+            border-color: rgba(200, 0, 0, 0.3);
+        }
+        .result-title { font-size: 20px; font-weight: 800; margin-bottom: 12px; }
+        .result-card .result-title { color: #44ee88; }
+        .result-card.lose .result-title { color: #ee4444; }
+        .result-stats { display: flex; flex-wrap: wrap; gap: 12px; }
+        .rs { font-size: 13px; color: #aaa; }
+        .rs strong { color: #ddd; font-size: 16px; }
+
+        /* ── Training overlay ─────────────────────────────────────── */
+        .overlay {
+            position: fixed;
+            inset: 0;
+            background: #000;
+            z-index: 100;
+            display: none;
+            flex-direction: column;
+        }
+        .overlay.active { display: flex; }
+        .overlay-header {
+            padding: 10px 16px;
+            background: rgba(10, 0, 20, 0.95);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            border-bottom: 1px solid rgba(150,0,255,0.3);
+            z-index: 1;
+        }
+        .overlay-title { font-size: 14px; font-weight: 700; color: #bf80ff; }
+        .btn-close {
+            background: none;
+            border: 1px solid rgba(150,0,255,0.4);
+            color: #bf80ff;
+            border-radius: 6px;
+            padding: 5px 12px;
+            cursor: pointer;
+            font-size: 13px;
+        }
+        .btn-close:hover { background: rgba(150,0,255,0.15); }
+        .overlay iframe {
+            flex: 1;
+            border: none;
+            width: 100%;
+        }
+    </style>
+</head>
+<body>
+
+<header>
+    <div>
+        <div class="logo">ŠVIHEJ</div>
+        <div class="tagline">Boss Fight Arena</div>
+    </div>
+</header>
+
+<main>
+
+    <!-- Hero card -->
+    <div class="hero">
+        <div class="boss-icon">👾</div>
+        <h1>Boss Fight</h1>
+        <p>Každý skok = útok na bosse. Skoč ve správný moment a odparuješ jeho útok. Poraz bosse dřív, než porazí tebe.</p>
+        <button class="btn-start" id="btnStart">⚔️ Spustit boj</button>
+    </div>
+
+    <!-- Stats -->
+    <div class="stats">
+        <div class="stat-card">
+            <div class="stat-value" id="statJumps">–</div>
+            <div class="stat-label">Celkem skoků</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-value" id="statWins">–</div>
+            <div class="stat-label">Vítězství</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-value" id="statKcal">–</div>
+            <div class="stat-label">kcal</div>
+        </div>
+    </div>
+
+    <!-- How to play -->
+    <div class="how">
+        <h2>Jak hrát</h2>
+        <div class="how-steps">
+            <div class="step">
+                <span class="step-icon">📱</span>
+                <div class="step-text"><strong>Nastav kameru</strong> tak, aby tě viděla celého – od hlavy po kotníky.</div>
+            </div>
+            <div class="step">
+                <span class="step-icon">⚔️</span>
+                <div class="step-text"><strong>Skoč</strong> a AI to detekuje jako útok. Každý skok ubere bossovi životy.</div>
+            </div>
+            <div class="step">
+                <span class="step-icon">⚡</span>
+                <div class="step-text">Až uvidíš <strong>⚡ SKOČ!</strong>, skoč v tu chvíli — <strong>odparuješ útok</strong> bosse.</div>
+            </div>
+            <div class="step">
+                <span class="step-icon">🏆</span>
+                <div class="step-text">Sněz bosse do nuly dřív, než on sníží tvé HP na nulu.</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Last result -->
+    <div class="result-card" id="resultCard">
+        <div class="result-title" id="resultTitle"></div>
+        <div class="result-stats" id="resultStats"></div>
+    </div>
+
+</main>
+
+<!-- Training overlay -->
+<div class="overlay" id="overlay">
+    <div class="overlay-header">
+        <span class="overlay-title">Boss Fight – trénink</span>
+        <button class="btn-close" id="btnClose">✕ Ukončit</button>
+    </div>
+    <iframe id="trainingFrame" src="" allow="camera; microphone" allowfullscreen></iframe>
+</div>
+
+<script>
+    const FRAME_URL = '/app/svihej-camapp/v2025-july-mux/frame.html';
+
+    // Saved stats
+    let totalJumps = parseInt(localStorage.getItem('bf_jumps') || '0');
+    let totalWins  = parseInt(localStorage.getItem('bf_wins')  || '0');
+    let totalKcal  = parseFloat(localStorage.getItem('bf_kcal') || '0');
+
+    function updateStats() {
+        document.getElementById('statJumps').textContent = totalJumps || '0';
+        document.getElementById('statWins').textContent  = totalWins  || '0';
+        document.getElementById('statKcal').textContent  = Math.round(totalKcal) || '0';
+    }
+    updateStats();
+
+    // Start training
+    document.getElementById('btnStart').addEventListener('click', () => {
+        const overlay = document.getElementById('overlay');
+        const frame   = document.getElementById('trainingFrame');
+        frame.src = FRAME_URL + '?' + Date.now();
+        overlay.classList.add('active');
+    });
+
+    // Close overlay
+    document.getElementById('btnClose').addEventListener('click', closeOverlay);
+    function closeOverlay() {
+        const overlay = document.getElementById('overlay');
+        const frame   = document.getElementById('trainingFrame');
+        overlay.classList.remove('active');
+        frame.src = '';
+    }
+
+    // Handle training result from frame.html
+    window.addEventListener('message', function(e) {
+        const data = e.data;
+        if (data.document !== 'training-complete') return;
+
+        const t = data.training || {};
+
+        // Update accumulated stats
+        const jumps = parseInt(t.jumps || 0);
+        const kcal  = parseFloat(t.totalKcal || 0);
+
+        totalJumps += jumps;
+        totalKcal  += kcal;
+
+        // We don't know win/lose here (gameset handles that internally).
+        // For now, if jumps > 0 we count it as a win when boss HP would be depleted.
+        // Phase 2: gameset will postMessage result back through the chain.
+        const isWin = jumps > 0;
+        if (isWin) totalWins++;
+
+        localStorage.setItem('bf_jumps', totalJumps);
+        localStorage.setItem('bf_wins',  totalWins);
+        localStorage.setItem('bf_kcal',  totalKcal);
+
+        updateStats();
+        closeOverlay();
+
+        // Show result card
+        const card  = document.getElementById('resultCard');
+        const title = document.getElementById('resultTitle');
+        const stats = document.getElementById('resultStats');
+
+        card.classList.toggle('lose', !isWin);
+        card.classList.add('visible');
+        title.textContent = isWin ? '🏆 Boj dokončen!' : '💀 Příště to vyjde';
+
+        const elapsed = Math.round((t.elapsed || 0));
+        const mm = Math.floor(elapsed / 60).toString().padStart(2, '0');
+        const ss = (elapsed % 60).toString().padStart(2, '0');
+
+        stats.innerHTML = `
+            <div class="rs">Skoky <strong>${jumps}</strong></div>
+            <div class="rs">Čas <strong>${mm}:${ss}</strong></div>
+            <div class="rs">Kalorie <strong>${kcal.toFixed(1)}</strong></div>
+            <div class="rs">Výška skoku <strong>${Math.round((t.jumpingElevation || 0) * 10) / 10}</strong></div>
+        `;
+        card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    });
+</script>
+</body>
+</html>

@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="cs">
+    <head>
+        <title>Švihej.cz – Boss Fight</title>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <meta HTTP-EQUIV="Pragma" CONTENT="no-cache">
+        <meta HTTP-EQUIV="Expires" CONTENT="-1">
+        <style>
+            body { margin: 0; overflow: hidden; height: 100vh; box-sizing: border-box; }
+            @supports (height: 100svh) { body { height: 100svh; } }
+            iframe { width: 100%; height: 100%; border: none; box-sizing: border-box; }
+        </style>
+    </head>
+    <body>
+        <iframe id="content" src="" data-src="/app/svihej-camapp/v2025-july-mux/app.html" allow="camera"></iframe>
+
+        <script>
+            // Activate gameset by setting localStorage before iframe loads.
+            // UserData reads this key on startup; 'arbody' means non-empty → gameset activates.
+            localStorage.setItem('Svihej.camapp2r.setupCustomEffectsType', 'arbody');
+            // Default to free training view (counter overlay)
+            localStorage.setItem('Svihej.camapp2r.setupCustomViewType', 'counterJumps');
+
+            function loadIframe() {
+                const iframe = document.getElementById('content');
+                iframe.src = iframe.dataset.src + '?' + Date.now();
+            }
+            loadIframe();
+
+            window.addEventListener('message', async function(event) {
+                const iframe = document.getElementById('content');
+                const data   = event.data;
+
+                if (data.document === 'ready') {
+                    iframe.contentWindow.postMessage({
+                        document: 'init',
+                        devmode:  true,
+                        features: {
+                            trainings: {
+                                free:        true,
+                                interval:    true,
+                                achievement: true,
+                                analyzator:  true,
+                                tempo:       false,
+                                tutorial:    false,
+                            },
+                            actions: {
+                                setupCustomView:    true,
+                                setupCustomEffects: true,  // enables gameset
+                                trikbar:            true,
+                                autozoom:           false,
+                            },
+                            effects:  { stars: false },
+                            services: { feedback: false },
+                        },
+                        seminars: [
+                            { label: 'Rozcvičení – Warm Up',                        src: 'https://www.youtube.com/embed/VwDYLff5Efg?si=5CmbZfQ3bZcYra5u' },
+                            { label: 'Jak se efektivně rozcvičovat před šviháním',  src: 'https://www.youtube.com/embed/0IQ3vmc1tK4?si=jLMCtVkOc4oGSacL' },
+                            { label: 'Nastavení délky švihadla',                     src: 'https://www.youtube.com/embed/JxUsvDLTMf0' },
+                        ],
+                        user: {
+                            id:     0,
+                            label:  'Hráč',
+                            weight: 70,
+                            height: 175,
+                            gender: 'male',
+                        },
+                    }, '*');
+                } else if (data.document === 'training') {
+                    // Forward training result to our parent (index.html)
+                    window.parent.postMessage({ document: 'training-complete', training: data.training }, '*');
+                } else {
+                    // Generic result ack
+                    await new Promise(r => setTimeout(r, 500));
+                    iframe.contentWindow.postMessage({
+                        document: 'result',
+                        sender:   data.document,
+                        token:    data[data.document]?.token,
+                        result:   true,
+                    }, '*');
+                }
+            });
+        </script>
+    </body>
+</html>

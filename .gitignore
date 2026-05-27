@@ -1,0 +1,21 @@
+# Videos — too large for git
+*.mp4
+*.MP4
+*.mov
+*.MOV
+*.avi
+
+# Validation videos folder
+Validační videa/
+
+# macOS
+.DS_Store
+**/.DS_Store
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Local dev
+local-dev/
