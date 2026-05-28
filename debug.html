@@ -255,6 +255,7 @@ canvas#sg {
                 <span class="sl">Kdiff</span>      <span class="sv" id="sKdiff">—</span>
                 <span class="sl">Kratio</span>     <span class="sv" id="sKratio">—</span>
                 <span class="sl">Reject</span>     <span class="sv" id="sReject">—</span>
+                <span class="sl">Style</span>      <span class="sv" id="sStyle">—</span>
             </div>
             <canvas id="sg"></canvas>
         </div>
@@ -310,7 +311,7 @@ class JumpDetector {
     hipUpDrvInt   = 0;
     hipDownDrvInt = 0;
     KhipdiffTopLimitSet = false;
-    dbg = { KhipDrv:0, Khipdiff:0, timeUp:0, timeDown:0, ratio:0, reject:'', hipy:0, dhipyAvg:0 };
+    dbg = { KhipDrv:0, Khipdiff:0, timeUp:0, timeDown:0, ratio:0, reject:'', hipy:0, dhipyAvg:0, style:'' };
 
     _sum(arr, key, n) {
         const len = Math.min(arr.length, n);
@@ -399,7 +400,14 @@ class JumpDetector {
                 if (!abort && (lh.y>lk.y||lh.y>la.y||rh.y>rk.y||rh.y>ra.y)) { abort=true; reason='leg_above_hip'; }
                 if (!abort && (lh.y-ls.y>0.30||rh.y-rs.y>0.30)) { abort=true; reason='body_big'; }
                 if (!abort && (lh.y-ls.y<0.03||rh.y-rs.y<0.03)) { abort=true; reason='body_small'; }
-                if (!abort) { jumped=true; }
+                if (!abort) {
+                    jumped = true;
+                    const ankleDiff = la.y - ra.y;
+                    const diffNorm  = Math.abs(ankleDiff) / Math.max(m, 0.01);
+                    this.dbg.style  = diffNorm < 0.05 ? 'snozmo'
+                                    : ankleDiff < 0   ? 'right'
+                                    : 'left';
+                }
                 else { this.dbg.reject = reason; }
             } else {
                 if      (!(10<Kdrv&&Kdrv<500))          this.dbg.reject=`KDrv=${Kdrv.toFixed(0)}`;
@@ -779,6 +787,9 @@ function updateDebugPanel() {
     const rejEl = document.getElementById('sReject');
     rejEl.textContent  = d.reject || '—';
     rejEl.className    = 'sv' + (d.reject ? ' bad' : ' ok');
+    const styleEl = document.getElementById('sStyle');
+    styleEl.textContent = d.style || '—';
+    styleEl.className   = 'sv' + (d.style ? ' ok' : '');
 }
 
 function updateStatus() {

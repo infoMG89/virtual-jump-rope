@@ -77,6 +77,7 @@ class JumpDetector:
         self.jump_count   = 0
         self.reject_log   = []        # list of (frame_ms, reason, KhipDrv, Khipdiff, Kratio)
         self.rejects      = defaultdict(int)
+        self.style_log    = []        # list of (frame_ms, diff_norm, ankle_diff)
 
         self.TIME_MIN    = p['TIME_MIN']
         self.TIME_MAX    = p['TIME_MAX']
@@ -194,6 +195,9 @@ class JumpDetector:
                 if not abort:
                     jumped = True
                     self.jump_count += 1
+                    ankle_diff = la['y'] - ra['y']
+                    diff_norm  = abs(ankle_diff) / max(m, 0.01)
+                    self.style_log.append((frame_ms, diff_norm, ankle_diff))
                 else:
                     self.rejects[reason] += 1
                     self.reject_log.append((frame_ms, reason, K_drv, K_hipdiff, K_ratio))
@@ -313,6 +317,11 @@ def run(params=None, filter_name=None, verbose=False):
         if det.rejects:
             top = sorted(det.rejects.items(), key=lambda x: -x[1])[:4]
             print(f"     rejects: {top}")
+
+        # diffNorm log (for style threshold tuning)
+        if det.style_log:
+            vals = [f"{dn:.3f}" for _, dn, _ in det.style_log]
+            print(f"     diffNorm: {' '.join(vals)}")
 
         n_total += 1
         if passed: n_pass += 1

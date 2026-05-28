@@ -31,6 +31,7 @@ OVERRIDES = {
     "/":                        "index.html",
     "/poc.html":                "poc.html",
     "/game_rhythm.html":        "game_rhythm.html",
+    "/game_rope.html":          "game_rope.html",
     "/mix_237plus_skoku.mp4":   "mix_237plus_skoku.mp4",
     "/test-video.mp4":          "/Users/martingren/Library/CloudStorage/GoogleDrive-gren.martin89@gmail.com/Shared drives/VÝVOJ PRODUKTŮ/Počítadlo/Videa testerů/IMG_9717.MP4",
 }

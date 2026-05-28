@@ -20,6 +20,7 @@ canvas#gc {
     inset: 0;
     width: 100%;
     height: 100%;
+    pointer-events: none;
 }
 video { display: none; }
 
@@ -63,6 +64,26 @@ video { display: none; }
     pointer-events: all;
 }
 #bpmLabel { font-size: 11px; color: #7050a0; text-transform: uppercase; letter-spacing: 0.1em; }
+#bpmLive  { font-size: 12px; color: #9060d0; min-height: 16px; }
+#trackBlock { display:flex; flex-direction:column; gap:6px; pointer-events:all; }
+#trackLabel { font-size:11px; color:#7050a0; text-transform:uppercase; letter-spacing:.1em; }
+#trackBtns  { display:flex; gap:6px; }
+.track-btn  {
+    background: rgba(40,0,70,0.55);
+    border: 1px solid rgba(130,0,220,0.35);
+    color: #a080d0;
+    padding: 5px 11px;
+    border-radius: 7px;
+    font-size: 12px;
+    font-weight: 700;
+    cursor: pointer;
+    white-space: nowrap;
+}
+.track-btn.active {
+    background: rgba(120,0,220,0.55);
+    border-color: rgba(200,80,255,0.7);
+    color: #f0d0ff;
+}
 #bpmSelect {
     background: rgba(40,0,70,0.7);
     border: 1px solid rgba(130,0,220,0.4);
@@ -106,65 +127,6 @@ video { display: none; }
     pointer-events: none;
 }
 
-/* Beat bar */
-#beatBar {
-    display: flex;
-    align-items: center;
-    gap: 28px;
-    pointer-events: none;
-}
-.beat-dot {
-    width: 14px;
-    height: 14px;
-    border-radius: 50%;
-    background: rgba(120,0,200,0.35);
-    border: 2px solid rgba(130,0,220,0.4);
-    transition: none;
-}
-.beat-dot.active {
-    background: rgba(220,80,255,0.9);
-    border-color: #fff;
-    box-shadow: 0 0 18px rgba(220,80,255,0.9);
-}
-
-/* Timing rail */
-#railWrap {
-    position: relative;
-    width: min(460px, 90vw);
-    height: 36px;
-    pointer-events: none;
-}
-#rail {
-    position: absolute;
-    top: 50%;
-    left: 0; right: 0;
-    height: 3px;
-    background: rgba(100,0,160,0.4);
-    transform: translateY(-50%);
-    border-radius: 2px;
-}
-#railTarget {
-    position: absolute;
-    top: 50%;
-    right: 0;
-    width: 22px;
-    height: 22px;
-    border: 3px solid rgba(200,80,255,0.8);
-    border-radius: 50%;
-    transform: translateY(-50%);
-    box-shadow: 0 0 14px rgba(200,80,255,0.5);
-}
-#railMarker {
-    position: absolute;
-    top: 50%;
-    width: 14px;
-    height: 14px;
-    background: #fff;
-    border-radius: 50%;
-    transform: translate(-50%, -50%);
-    box-shadow: 0 0 10px rgba(255,255,255,0.9);
-    left: 0%;
-}
 
 /* Start/Stop button */
 #startBtn {
@@ -208,6 +170,33 @@ video { display: none; }
     color: #9070b0;
     pointer-events: none;
 }
+#sectionAnnounce {
+    position: fixed;
+    left: 50%;
+    top: 22%;
+    transform: translate(-50%, -50%);
+    font-size: 36px;
+    font-weight: 900;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.4s ease;
+    text-shadow: 0 0 30px rgba(200,80,255,0.9);
+}
+#songProgress {
+    position: fixed;
+    top: 0; left: 0; right: 0;
+    height: 3px;
+    background: rgba(100,0,160,0.25);
+    pointer-events: none;
+}
+#songProgressFill {
+    height: 100%;
+    background: linear-gradient(90deg, #6600cc, #ff44cc);
+    width: 0%;
+    transition: width 0.4s linear;
+}
 </style>
 </head>
 <body>
@@ -217,14 +206,22 @@ video { display: none; }
 
 <div id="hud">
     <div id="topBar">
+        <div id="trackBlock">
+            <div id="trackLabel">Track</div>
+            <div id="trackBtns">
+                <button class="track-btn active" data-track="0">AM GROOVE</button>
+                <button class="track-btn" data-track="1">WRECKING BALL</button>
+            </div>
+        </div>
         <div id="bpmBlock">
-            <div id="bpmLabel">BPM</div>
+            <div id="bpmLabel">Start BPM</div>
             <select id="bpmSelect">
                 <option value="120">120</option>
                 <option value="140" selected>140</option>
                 <option value="160">160</option>
                 <option value="180">180</option>
             </select>
+            <div id="bpmLive"></div>
         </div>
         <div id="scoreBlock">
             <div id="scoreVal">0</div>
@@ -233,22 +230,13 @@ video { display: none; }
     </div>
 </div>
 
+<div id="songProgress"><div id="songProgressFill"></div></div>
 <div id="feedback"></div>
+<div id="sectionAnnounce"></div>
 <div id="countdown"></div>
 <div id="modelStatus">Načítám model…</div>
 
 <div id="bottomArea">
-    <div id="beatBar">
-        <div class="beat-dot" id="bd0"></div>
-        <div class="beat-dot" id="bd1"></div>
-        <div class="beat-dot" id="bd2"></div>
-        <div class="beat-dot" id="bd3"></div>
-    </div>
-    <div id="railWrap">
-        <div id="rail"></div>
-        <div id="railTarget"></div>
-        <div id="railMarker"></div>
-    </div>
     <button id="startBtn">START</button>
 </div>
 
@@ -278,7 +266,7 @@ class JumpDetector {
     hipUpDrvInt   = 0;
     hipDownDrvInt = 0;
     KhipdiffTopLimitSet = false;
-    dbg = { KhipDrv:0, Khipdiff:0, timeUp:0, timeDown:0, ratio:0, reject:'', hipy:0, dhipyAvg:0 };
+    dbg = { KhipDrv:0, Khipdiff:0, timeUp:0, timeDown:0, ratio:0, reject:'', hipy:0, dhipyAvg:0, style:'' };
 
     _sum(arr, key, n) {
         const len = Math.min(arr.length, n);
@@ -367,7 +355,14 @@ class JumpDetector {
                 if (!abort && (lh.y>lk.y||lh.y>la.y||rh.y>rk.y||rh.y>ra.y)) { abort=true; reason='leg_above_hip'; }
                 if (!abort && (lh.y-ls.y>0.30||rh.y-rs.y>0.30)) { abort=true; reason='body_big'; }
                 if (!abort && (lh.y-ls.y<0.03||rh.y-rs.y<0.03)) { abort=true; reason='body_small'; }
-                if (!abort) { jumped=true; }
+                if (!abort) {
+                    jumped = true;
+                    const ankleDiff = la.y - ra.y;
+                    const diffNorm  = Math.abs(ankleDiff) / Math.max(m, 0.01);
+                    this.dbg.style  = diffNorm < 0.05 ? 'snozmo'
+                                    : ankleDiff < 0   ? 'right'
+                                    : 'left';
+                }
                 else { this.dbg.reject = reason; }
             } else {
                 if      (!(10<Kdrv&&Kdrv<500))   this.dbg.reject=`KDrv`;
@@ -397,25 +392,115 @@ class JumpDetector {
     }
 }
 
+// ── Wrecking Ball song data ────────────────────────────────────────────
+const WB_SECTIONS = [
+    { name: 'Intro',        bars:  8, bpm:  90, type: 'intro'  },
+    { name: 'Verse',        bars: 16, bpm: 110, type: 'verse'  },
+    { name: 'Pre-Chorus',   bars:  8, bpm: 130, type: 'pre'    },
+    { name: 'Chorus',       bars: 16, bpm: 150, type: 'chorus' },
+    { name: 'Verse 2',      bars:  8, bpm: 110, type: 'verse'  },
+    { name: 'Pre-Chorus 2', bars:  8, bpm: 130, type: 'pre'    },
+    { name: 'Chorus 2',     bars: 16, bpm: 150, type: 'chorus' },
+    { name: 'Bridge',       bars:  8, bpm:  90, type: 'bridge' },
+    { name: 'Final Chorus', bars: 16, bpm: 160, type: 'chorus' },
+    { name: 'Outro',        bars:  4, bpm: 110, type: 'outro'  },
+];
+
+// Piano arpeggios per chord (8th notes, 8 values per bar): C G Am F
+const WB_ARPS = [
+    [261.6, 329.6, 392.0, 329.6, 261.6, 329.6, 392.0, 329.6],
+    [196.0, 246.9, 293.7, 246.9, 196.0, 246.9, 293.7, 246.9],
+    [220.0, 261.6, 329.6, 261.6, 220.0, 261.6, 329.6, 261.6],
+    [174.6, 220.0, 261.6, 220.0, 174.6, 220.0, 261.6, 220.0],
+];
+// Bass per chord (4 beats): C G Am F
+const WB_BASS = [
+    [ 65.4,  65.4,  98.0,  82.4],
+    [ 98.0,  98.0, 146.8, 123.5],
+    [110.0, 110.0, 164.8, 130.8],
+    [ 87.3,  87.3, 130.8, 110.0],
+];
+// Pad chords: C G Am F
+const WB_PADS = [
+    [261.6, 329.6, 392.0],
+    [196.0, 246.9, 293.7],
+    [220.0, 261.6, 329.6],
+    [174.6, 220.0, 261.6],
+];
+
+// Lead melody: quarter-note freq per beat (0 = rest)
+// Index = barInPhrase*4 + beatInBar  (8-bar phrases = 32 entries)
+const WB_CHORUS_MEL = [
+    659.3, 587.3, 523.3, 587.3,   // bar 0  C
+    659.3,     0, 523.3, 587.3,   // bar 1  G
+    659.3, 587.3, 523.3, 493.9,   // bar 2  Am
+    523.3,     0, 440.0,     0,   // bar 3  F
+    392.0, 440.0, 523.3, 587.3,   // bar 4  C
+    659.3,     0, 587.3, 523.3,   // bar 5  G
+    659.3, 587.3, 523.3, 493.9,   // bar 6  Am
+    523.3,     0,     0,     0,   // bar 7  F
+];
+const WB_PRE_MEL = [
+    523.3, 523.3, 587.3, 587.3,
+    587.3, 587.3, 659.3, 659.3,
+    659.3,     0, 587.3,     0,
+    523.3,     0,     0,     0,
+    659.3, 587.3, 523.3, 587.3,
+    659.3,     0, 493.9, 523.3,
+    440.0, 523.3, 659.3,     0,
+    587.3,     0, 523.3,     0,
+];
+const WB_BRIDGE_MEL = [
+    523.3,     0, 440.0,     0,
+    493.9,     0, 392.0,     0,
+    440.0,     0, 392.0,     0,
+    349.2,     0,     0,     0,
+    659.3,     0, 587.3,     0,
+    523.3,     0, 493.9,     0,
+    440.0,     0,     0,     0,
+    349.2,     0,     0,     0,
+];
+
+function wbGetSection(bar) {
+    let cum = 0;
+    for (let i = 0; i < WB_SECTIONS.length; i++) {
+        const s = WB_SECTIONS[i];
+        if (bar < cum + s.bars) return { ...s, idx: i, barInSection: bar - cum };
+        cum += s.bars;
+    }
+    return null;
+}
+
 // ── BeatEngine ────────────────────────────────────────────────────────
 class BeatEngine {
-    constructor(bpm, onBeat) {
-        this.bpm = bpm;
-        this.onBeat = onBeat;
-        this.audioCtx = null;
-        this.interval = 60 / bpm;  // seconds per beat
-        this.nextBeatTime = 0;
-        this.beatIndex = 0;
-        this._timerId = null;
-        this.running = false;
+    constructor(startBpm, onBeat, trackId = 0) {
+        this.startBpm        = startBpm;
+        this.bpm             = startBpm;
+        this.onBeat          = onBeat;
+        this.onSectionChange = null;
+        this.trackId         = trackId;
+        this.audioCtx        = null;
+        this.next16th        = 0;
+        this.pos16           = 0;
+        this.beatIndex       = 0;
+        this._timerId        = null;
+        this.running         = false;
+        // WB song state
+        this._wbBar          = 0;
+        this._wbSectionIdx   = -1;
+        this._wbBarInSection = 0;
     }
 
+    get beatSec() { return 60 / this.bpm; }
+    get s16()     { return this.beatSec / 4; }
+
     start() {
-        this.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-        this.interval = 60 / this.bpm;
-        this.nextBeatTime = this.audioCtx.currentTime + 0.05;
+        this.audioCtx  = new (window.AudioContext || window.webkitAudioContext)();
+        this.bpm       = this.startBpm;
+        this.next16th  = this.audioCtx.currentTime + 0.05;
+        this.pos16     = 0;
         this.beatIndex = 0;
-        this.running = true;
+        this.running   = true;
         this._schedule();
     }
 
@@ -427,61 +512,246 @@ class BeatEngine {
 
     _schedule() {
         if (!this.running) return;
-        const lookahead = 0.1;  // seconds ahead to schedule
-        while (this.nextBeatTime < this.audioCtx.currentTime + lookahead) {
-            this._playBeat(this.nextBeatTime, this.beatIndex);
-            // Convert audioCtx time to performance.now ms for jump timing
-            const perfMs = performance.now() + (this.nextBeatTime - this.audioCtx.currentTime) * 1000;
-            this.onBeat(this.beatIndex, perfMs);
-            this.nextBeatTime += this.interval;
-            this.beatIndex++;
+        const ac = this.audioCtx;
+        while (this.next16th < ac.currentTime + LOOKAHEAD_MS / 1000 + 0.08) {
+            const pos  = this.pos16;
+            const beat = this.beatIndex;
+            const when = this.next16th;
+
+            // WB: track bar / section changes at bar boundary
+            if (this.trackId === 1 && pos === 0) {
+                const info = wbGetSection(this._wbBar);
+                if (info) {
+                    if (info.idx !== this._wbSectionIdx) {
+                        this._wbSectionIdx = info.idx;
+                        this.bpm           = info.bpm;
+                        if (this.onSectionChange) this.onSectionChange(info);
+                        updateBpmDisplay(info.bpm);
+                    }
+                    this._wbBarInSection = info.barInSection;
+                } else if (this._wbSectionIdx !== -99) {
+                    this._wbSectionIdx = -99;
+                    if (this.onSectionChange) this.onSectionChange(null); // song ended
+                }
+                this._wbBar++;
+            }
+
+            // Fire game beat callback on every beat
+            if (pos % 4 === 0) {
+                const perfMs = performance.now() + (when - ac.currentTime) * 1000;
+                this.onBeat(beat, perfMs);
+                // Groove track: auto-speed every 32 beats
+                if (this.trackId === 0 && beat > 0 && beat % 32 === 0) {
+                    const max = this.startBpm + 40;
+                    this.bpm  = this.bpm < max ? Math.min(this.bpm + 5, max) : this.startBpm;
+                    updateBpmDisplay(this.bpm);
+                }
+            }
+
+            this._play16th(when, pos, beat);
+
+            this.next16th += this.s16;
+            this.pos16     = (this.pos16 + 1) % 16;
+            if (pos % 4 === 3) this.beatIndex++;
         }
         this._timerId = setTimeout(() => this._schedule(), 20);
     }
 
-    _playBeat(when, index) {
-        const ctx = this.audioCtx;
-        const barPos = index % 4;
+    _play16th(when, pos, beat) {
+        if (this.trackId === 1) { this._play16th_wb(when, pos, beat); return; }
 
-        // Hi-hat on every beat
-        this._hihat(when, barPos === 0 ? 0.55 : 0.3);
+        const barBeat = beat % 16;
+        const bar     = Math.floor(barBeat / 4);
 
-        // Kick on beats 0 and 2 of bar
-        if (barPos === 0 || barPos === 2) {
-            this._kick(when);
+        // ── Kick: beat 1 (pos 0) and beat 3 (pos 8) ──
+        if (pos === 0) this._kick(when, 0.9);
+        if (pos === 8) this._kick(when, 0.72);
+
+        // ── Snare: beat 2 (pos 4) and beat 4 (pos 12) ──
+        if (pos === 4 || pos === 12) this._snare(when);
+
+        // ── Closed hi-hat: every 8th note; accent on beats ──
+        if (pos % 2 === 0) {
+            const onBeat = (pos % 4 === 0);
+            this._hihat(when, false, onBeat ? (pos === 0 ? 0.42 : 0.30) : 0.22);
+        }
+        if (pos === 6 || pos === 14) this._hihat(when, true, 0.36);
+
+        // ── Bass ──
+        if (pos % 4 === 0) {
+            const bass = [
+                110.0, 110.0, 164.8, 146.8,
+                130.8, 130.8, 196.0, 164.8,
+                110.0, 130.8, 164.8, 220.0,
+                196.0, 174.6, 164.8, 110.0,
+            ];
+            this._bass(when, bass[barBeat], this.beatSec * 0.82);
+        }
+
+        // ── Pad ──
+        if (pos === 0) {
+            const pads = [
+                [220.0, 261.6, 329.6],
+                [174.6, 220.0, 261.6],
+                [261.6, 329.6, 392.0],
+                [196.0, 246.9, 293.7],
+            ];
+            this._pad(when, pads[bar], this.beatSec * 4 * 0.88);
         }
     }
 
-    _kick(when) {
-        const ctx = this.audioCtx;
-        const osc = ctx.createOscillator();
-        const env = ctx.createGain();
-        osc.connect(env); env.connect(ctx.destination);
-        osc.frequency.setValueAtTime(120, when);
-        osc.frequency.exponentialRampToValueAtTime(0.01, when + 0.35);
-        env.gain.setValueAtTime(0.9, when);
-        env.gain.exponentialRampToValueAtTime(0.001, when + 0.35);
-        osc.start(when); osc.stop(when + 0.35);
+    // ── Wrecking Ball — full song, section-aware ──────────────────────
+    _play16th_wb(when, pos, beat) {
+        if (this._wbSectionIdx < 0 || this._wbSectionIdx === -99) return;
+        const sec  = WB_SECTIONS[this._wbSectionIdx];
+        const type = sec.type;
+        const barS = this._wbBarInSection;   // bar within current section
+        const chord = barS % 4;              // 0=C 1=G 2=Am 3=F
+
+        // ── Piano arpeggio (8th notes) ──────────────────────────────
+        if (pos % 2 === 0) {
+            const vol = type === 'chorus' ? 0.36
+                      : type === 'bridge' ? 0.22
+                      : type === 'intro'  ? 0.28 : 0.26;
+            this._piano(when, WB_ARPS[chord][pos / 2], this.beatSec * 0.40, vol);
+        }
+
+        // ── Drums ───────────────────────────────────────────────────
+        if (type !== 'intro' && type !== 'bridge') {
+            const big = (type === 'chorus');
+            if (pos === 0) this._kick(when, big ? 0.90 : 0.75);
+            if (pos === 8) this._kick(when, big ? 0.72 : 0.60);
+            if (pos === 4 || pos === 12) this._snare(when);
+            // Hi-hats: 8ths + 16ths in chorus/pre
+            if (pos % 2 === 0) this._hihat(when, false, big ? 0.28 : 0.20);
+            if (big && pos % 2 === 1) this._hihat(when, false, 0.12);  // extra 16ths in chorus
+            if ((big || type === 'pre') && (pos === 6 || pos === 14))
+                this._hihat(when, true, 0.34);
+        }
+
+        // ── Bass ────────────────────────────────────────────────────
+        if (pos % 4 === 0) {
+            const vol = type === 'chorus' ? 0.55
+                      : type === 'intro'  ? 0.28
+                      : type === 'bridge' ? 0.30 : 0.42;
+            this._bass(when, WB_BASS[chord][pos / 4], this.beatSec * 0.82, vol);
+        }
+
+        // ── Pad ─────────────────────────────────────────────────────
+        if (pos === 0) {
+            const vol = type === 'chorus' ? 0.062
+                      : type === 'bridge' ? 0.030
+                      : type === 'intro'  ? 0.038 : 0.048;
+            this._pad(when, WB_PADS[chord], this.beatSec * 4 * 0.88, vol);
+        }
+
+        // ── Lead melody (quarter notes) ─────────────────────────────
+        if (pos % 4 === 0) {
+            const b   = pos / 4;                    // beat within bar (0-3)
+            const idx = (barS % 8) * 4 + b;        // position in 8-bar phrase (0-31)
+            let melF  = 0, melV = 0;
+
+            if (type === 'chorus') {
+                melF = WB_CHORUS_MEL[idx % 32]; melV = 0.46;
+            } else if (type === 'pre') {
+                melF = WB_PRE_MEL[idx % 32];   melV = 0.38;
+            } else if (type === 'bridge') {
+                melF = WB_BRIDGE_MEL[idx % 32]; melV = 0.34;
+            }
+            if (melF > 0) this._piano(when, melF, this.beatSec * 0.88, melV);
+        }
     }
 
-    _hihat(when, vol) {
-        const ctx = this.audioCtx;
-        const bufLen = Math.floor(ctx.sampleRate * 0.06);
-        const buf = ctx.createBuffer(1, bufLen, ctx.sampleRate);
-        const d   = buf.getChannelData(0);
-        for (let i = 0; i < bufLen; i++) d[i] = Math.random() * 2 - 1;
-
-        const src    = ctx.createBufferSource();
-        src.buffer   = buf;
-        const filter = ctx.createBiquadFilter();
-        filter.type  = 'highpass';
-        filter.frequency.value = 8000;
-        const env = ctx.createGain();
+    _kick(when, vol) {
+        const ac = this.audioCtx;
+        const osc = ac.createOscillator(), env = ac.createGain();
+        osc.connect(env); env.connect(ac.destination);
+        osc.frequency.setValueAtTime(130, when);
+        osc.frequency.exponentialRampToValueAtTime(0.01, when + 0.28);
         env.gain.setValueAtTime(vol, when);
-        env.gain.exponentialRampToValueAtTime(0.001, when + 0.06);
+        env.gain.exponentialRampToValueAtTime(0.001, when + 0.28);
+        osc.start(when); osc.stop(when + 0.28);
+    }
 
-        src.connect(filter); filter.connect(env); env.connect(ctx.destination);
-        src.start(when); src.stop(when + 0.06);
+    _snare(when) {
+        const ac  = this.audioCtx;
+        const len = Math.floor(ac.sampleRate * 0.18);
+        const buf = ac.createBuffer(1, len, ac.sampleRate);
+        const d   = buf.getChannelData(0);
+        for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+        const ns = ac.createBufferSource(); ns.buffer = buf;
+        const nf = ac.createBiquadFilter(); nf.type = 'bandpass'; nf.frequency.value = 2800; nf.Q.value = 0.6;
+        const ne = ac.createGain();
+        ne.gain.setValueAtTime(0.5, when); ne.gain.exponentialRampToValueAtTime(0.001, when + 0.18);
+        ns.connect(nf); nf.connect(ne); ne.connect(ac.destination);
+        ns.start(when); ns.stop(when + 0.18);
+        const osc = ac.createOscillator(), oe = ac.createGain();
+        osc.frequency.value = 180;
+        oe.gain.setValueAtTime(0.32, when); oe.gain.exponentialRampToValueAtTime(0.001, when + 0.07);
+        osc.connect(oe); oe.connect(ac.destination);
+        osc.start(when); osc.stop(when + 0.07);
+    }
+
+    _hihat(when, open, vol) {
+        const ac  = this.audioCtx;
+        const dur = open ? 0.13 : 0.032;
+        const len = Math.floor(ac.sampleRate * dur);
+        const buf = ac.createBuffer(1, len, ac.sampleRate);
+        const d   = buf.getChannelData(0);
+        for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+        const src = ac.createBufferSource(); src.buffer = buf;
+        const fil = ac.createBiquadFilter(); fil.type = 'highpass'; fil.frequency.value = open ? 5500 : 9500;
+        const env = ac.createGain();
+        env.gain.setValueAtTime(vol, when); env.gain.exponentialRampToValueAtTime(0.001, when + dur);
+        src.connect(fil); fil.connect(env); env.connect(ac.destination);
+        src.start(when); src.stop(when + dur);
+    }
+
+    _bass(when, freq, dur, vol = 0.5) {
+        const ac  = this.audioCtx;
+        const osc = ac.createOscillator(); osc.type = 'sawtooth'; osc.frequency.value = freq;
+        const fil = ac.createBiquadFilter(); fil.type = 'lowpass';
+        fil.frequency.setValueAtTime(700, when);
+        fil.frequency.exponentialRampToValueAtTime(140, when + dur * 0.45);
+        const env = ac.createGain();
+        env.gain.setValueAtTime(0, when);
+        env.gain.linearRampToValueAtTime(vol, when + 0.018);
+        env.gain.exponentialRampToValueAtTime(0.001, when + dur);
+        osc.connect(fil); fil.connect(env); env.connect(ac.destination);
+        osc.start(when); osc.stop(when + dur);
+    }
+
+    _pad(when, freqs, dur, vol = 0.052) {
+        const ac = this.audioCtx;
+        for (const freq of freqs) {
+            for (const det of [-7, 7]) {
+                const osc = ac.createOscillator(); osc.type = 'sine';
+                osc.frequency.value = freq; osc.detune.value = det;
+                const env = ac.createGain();
+                env.gain.setValueAtTime(0, when);
+                env.gain.linearRampToValueAtTime(vol, when + 0.45);
+                env.gain.setValueAtTime(vol, when + dur - 0.45);
+                env.gain.linearRampToValueAtTime(0, when + dur);
+                osc.connect(env); env.connect(ac.destination);
+                osc.start(when); osc.stop(when + dur);
+            }
+        }
+    }
+
+    _piano(when, freq, dur, vol = 0.35) {
+        const ac   = this.audioCtx;
+        const osc1 = ac.createOscillator(); osc1.type = 'triangle'; osc1.frequency.value = freq;
+        const osc2 = ac.createOscillator(); osc2.type = 'sine';     osc2.frequency.value = freq * 2;
+        const mix  = ac.createGain(); mix.gain.value = 0.28;
+        const env  = ac.createGain();
+        env.gain.setValueAtTime(0, when);
+        env.gain.linearRampToValueAtTime(vol, when + 0.007);
+        env.gain.exponentialRampToValueAtTime(0.001, when + Math.max(dur, 0.08));
+        osc1.connect(env);
+        osc2.connect(mix); mix.connect(env);
+        env.connect(ac.destination);
+        osc1.start(when); osc1.stop(when + dur + 0.02);
+        osc2.start(when); osc2.stop(when + dur + 0.02);
     }
 }
 
@@ -567,9 +837,7 @@ const feedbackEl = document.getElementById('feedback');
 const cdEl       = document.getElementById('countdown');
 const scoreEl    = document.getElementById('scoreVal');
 const comboEl    = document.getElementById('comboVal');
-const markerEl   = document.getElementById('railMarker');
 const statusEl   = document.getElementById('modelStatus');
-const beatDots   = [0,1,2,3].map(i => document.getElementById('bd'+i));
 
 // ── State ─────────────────────────────────────────────────────────────
 let poseDetector = null;
@@ -583,6 +851,8 @@ let videoRect    = { x:0, y:0, w:1, h:1 };
 let cameraStream = null;
 let currentBeatIndex = -1;
 let lastBeatPerfNow  = 0;
+let selectedTrack    = 0;
+let fallingBlocks    = [];  // { targetMs, scored, hitResult, hitAt }
 
 // ── Camera ────────────────────────────────────────────────────────────
 async function startCamera() {
@@ -674,7 +944,6 @@ async function startGame() {
     if (gameRunning) return;
     const bpm = parseInt(bpmSelect.value, 10);
     startBtn.disabled = true;
-    bpmSelect.disabled = true;
 
     // Countdown 3-2-1
     cdEl.style.opacity = '1';
@@ -691,11 +960,26 @@ async function startGame() {
     startBtn.classList.add('running');
     startBtn.disabled = false;
 
-    beatEngine = new BeatEngine(bpm, (beatIndex, perfMs) => {
-        currentBeatIndex  = beatIndex;
-        lastBeatPerfNow   = perfMs;
+    const startBpm = selectedTrack === 1 ? WB_SECTIONS[0].bpm : parseInt(bpmSelect.value, 10);
+    beatEngine = new BeatEngine(startBpm, (beatIndex, perfMs) => {
         gc_.onBeat(beatIndex, perfMs);
-    });
+        fallingBlocks.push({ targetMs: perfMs, scored: false, hitResult: null, hitAt: 0 });
+    }, selectedTrack);
+
+    if (selectedTrack === 1) {
+        // Pre-compute total WB song duration in beats for progress bar
+        const wbTotalBeats = WB_SECTIONS.reduce((s, sec) => s + sec.bars * 4, 0);
+        beatEngine.onSectionChange = (info) => {
+            if (!info) { stopGame(); return; }  // song ended
+            showSectionAnnounce(info.name, info.type);
+            updateBpmDisplay(info.bpm);
+            // Update song progress
+            let cumBeats = 0;
+            for (let i = 0; i < info.idx; i++) cumBeats += WB_SECTIONS[i].bars * 4;
+            const pct = cumBeats / wbTotalBeats * 100;
+            document.getElementById('songProgressFill').style.width = pct + '%';
+        };
+    }
     beatEngine.start();
 }
 
@@ -705,12 +989,22 @@ function stopGame() {
     if (beatEngine) { beatEngine.stop(); beatEngine = null; }
     startBtn.textContent = 'START';
     startBtn.classList.remove('running');
-    bpmSelect.disabled = false;
     currentBeatIndex = -1;
     lastBeatPerfNow  = 0;
-    markerEl.style.left = '0%';
-    beatDots.forEach(d => d.classList.remove('active'));
+    fallingBlocks    = [];
+    document.getElementById('bpmLive').textContent = '';
+    document.getElementById('songProgressFill').style.width = '0%';
+    document.getElementById('sectionAnnounce').style.opacity = '0';
 }
+
+bpmSelect.addEventListener('change', () => {
+    const newBpm = parseInt(bpmSelect.value, 10);
+    if (gameRunning && beatEngine) {
+        beatEngine.startBpm = newBpm;
+        beatEngine.bpm      = newBpm;
+        updateBpmDisplay(newBpm);
+    }
+});
 
 startBtn.addEventListener('click', () => {
     if (gameRunning) stopGame();
@@ -718,6 +1012,33 @@ startBtn.addEventListener('click', () => {
 });
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+// Track selector
+document.querySelectorAll('.track-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+        document.querySelectorAll('.track-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        selectedTrack = parseInt(btn.dataset.track, 10);
+        bpmSelect.disabled = (selectedTrack === 1);
+        if (beatEngine) beatEngine.trackId = selectedTrack;
+    });
+});
+
+let _sectionAnnounceTimer = null;
+function showSectionAnnounce(name, type) {
+    const el = document.getElementById('sectionAnnounce');
+    const colors = { intro:'#a080ff', verse:'#80c0ff', pre:'#ffdd44', chorus:'#ff88ff', bridge:'#44ffcc', outro:'#a0a0ff' };
+    el.textContent  = name;
+    el.style.color  = colors[type] || '#fff';
+    el.style.opacity = '1';
+    el.style.fontSize = type === 'chorus' ? '44px' : '32px';
+    clearTimeout(_sectionAnnounceTimer);
+    _sectionAnnounceTimer = setTimeout(() => { el.style.opacity = '0'; }, 2500);
+}
+
+function updateBpmDisplay(bpm) {
+    document.getElementById('bpmLive').textContent = `→ ${Math.round(bpm)} BPM`;
+}
 
 // ── Render loop ───────────────────────────────────────────────────────
 let lastJumpFlash = 0;
@@ -747,7 +1068,20 @@ function renderLoop() {
         if (jumped) {
             lastJumpFlash = performance.now();
             if (gameRunning) {
-                gc_.onJump(performance.now());
+                const jnow = performance.now();
+                gc_.onJump(jnow);
+                // Mark nearest unscored GH block
+                let best = null, bestDist = 350;
+                for (const b of fallingBlocks) {
+                    if (b.scored) continue;
+                    const dist = Math.abs(jnow - b.targetMs);
+                    if (dist < bestDist) { best = b; bestDist = dist; }
+                }
+                if (best) {
+                    best.scored   = true;
+                    best.hitResult = bestDist <= 100 ? 'perfekt' : 'dobre';
+                    best.hitAt    = jnow;
+                }
             }
         }
 
@@ -789,19 +1123,132 @@ function renderLoop() {
         feedbackEl.style.opacity = '0';
     }
 
-    // Timing rail marker — sawtooth: 0%→100% over one beat interval, target at right (100%)
-    if (gameRunning && beatEngine && lastBeatPerfNow > 0) {
-        const intervalMs = (60 / beatEngine.bpm) * 1000;
-        const elapsed    = performance.now() - lastBeatPerfNow;
-        const frac       = Math.min(elapsed / intervalMs, 1.0);
-        markerEl.style.left = (frac * 100) + '%';
-
-        // Beat dots — light up current bar position; pulse briefly after beat
-        const barPos = currentBeatIndex % 4;
-        beatDots.forEach((d, i) => {
-            d.classList.toggle('active', gameRunning && i === barPos && elapsed < 120);
-        });
+    // Guitar Hero lane
+    if (gameRunning) {
+        // Derive lastBeatPerfNow: most recently passed beat time
+        for (const b of fallingBlocks) {
+            if (b.targetMs <= now && b.targetMs > lastBeatPerfNow) lastBeatPerfNow = b.targetMs;
+        }
+        drawGHLane(ctx, W, H, now);
     }
+}
+
+// ── Guitar Hero lane ─────────────────────────────────────────────────
+const LOOKAHEAD_MS = 2000;
+const GH_LANE_W    = 140;
+const GH_BLOCK_W   = 96;
+const GH_BLOCK_H   = 30;
+
+function drawGHLane(ctx, W, H, now) {
+    const laneX  = W / 2 - GH_LANE_W / 2;
+    const laneY  = 0;
+    const judgeY = H * 0.78;
+    const laneH  = judgeY - laneY;
+    const bx     = W / 2 - GH_BLOCK_W / 2;
+
+    ctx.save();
+
+    // Lane background strip
+    ctx.fillStyle = 'rgba(10,0,25,0.55)';
+    ctx.beginPath();
+    ctx.roundRect(laneX, laneY, GH_LANE_W, laneH + 48, 14);
+    ctx.fill();
+
+    // Lane edge lines
+    ctx.strokeStyle = 'rgba(100,0,180,0.35)';
+    ctx.lineWidth   = 1;
+    ctx.beginPath();
+    ctx.moveTo(laneX, laneY); ctx.lineTo(laneX, judgeY + 48);
+    ctx.moveTo(laneX + GH_LANE_W, laneY); ctx.lineTo(laneX + GH_LANE_W, judgeY + 48);
+    ctx.stroke();
+
+    // Judgment line — pulses on beat
+    const beatAge   = lastBeatPerfNow > 0 ? now - lastBeatPerfNow : 9999;
+    const beatPulse = beatAge < 120 ? 1 - beatAge / 120 : 0;
+    const jAlpha    = 0.55 + beatPulse * 0.45;
+    const jWidth    = 2 + beatPulse * 3;
+    ctx.strokeStyle = `rgba(200,80,255,${jAlpha.toFixed(2)})`;
+    ctx.lineWidth   = jWidth;
+    ctx.shadowColor = '#cc44ff';
+    ctx.shadowBlur  = 8 + beatPulse * 14;
+    ctx.beginPath();
+    ctx.moveTo(laneX, judgeY); ctx.lineTo(laneX + GH_LANE_W, judgeY);
+    ctx.stroke();
+    ctx.shadowBlur  = 0;
+
+    // Mark expired (unscored) blocks as missed
+    for (const b of fallingBlocks) {
+        if (!b.scored && now - b.targetMs > 280) {
+            b.scored    = true;
+            b.hitResult = 'miss';
+            b.hitAt     = now;
+        }
+    }
+
+    // Draw blocks
+    for (const b of fallingBlocks) {
+        const elapsed = now - (b.targetMs - LOOKAHEAD_MS);
+        if (elapsed < 0) continue;
+        const y = laneY + elapsed / LOOKAHEAD_MS * laneH;
+        if (y > judgeY + 70) continue;
+
+        const cy = y;
+
+        let color;
+        if (!b.hitResult) {
+            color = '#cc44ff';
+        } else if (b.hitResult === 'perfekt') {
+            color = '#44ffaa';
+        } else if (b.hitResult === 'dobre') {
+            color = '#ffdd44';
+        } else {
+            color = '#ff4455';
+        }
+
+        let alpha = 1;
+        if (b.hitResult) {
+            const hitAge = now - b.hitAt;
+            alpha = Math.max(0, 1 - hitAge / 380);
+            if (alpha <= 0) continue;
+        }
+
+        ctx.globalAlpha = alpha;
+        ctx.fillStyle   = color;
+        ctx.shadowColor = color;
+        ctx.shadowBlur  = 14;
+        ctx.beginPath();
+        ctx.roundRect(bx, cy - GH_BLOCK_H / 2, GH_BLOCK_W, GH_BLOCK_H, 8);
+        ctx.fill();
+        ctx.shadowBlur  = 0;
+
+        // Perfect hit explosion ring
+        if (b.hitResult === 'perfekt') {
+            const hitAge = now - b.hitAt;
+            if (hitAge < 320) {
+                const r   = 18 + hitAge * 0.28;
+                const alp = (1 - hitAge / 320) * alpha;
+                ctx.globalAlpha = alp;
+                ctx.strokeStyle = '#44ffaa';
+                ctx.lineWidth   = 3;
+                ctx.shadowColor = '#44ffaa';
+                ctx.shadowBlur  = 10;
+                ctx.beginPath();
+                ctx.arc(W / 2, judgeY, r, 0, Math.PI * 2);
+                ctx.stroke();
+                ctx.shadowBlur = 0;
+            }
+        }
+
+        ctx.globalAlpha = 1;
+    }
+
+    // Cleanup old blocks
+    const cutoff = now - 700;
+    for (let i = fallingBlocks.length - 1; i >= 0; i--) {
+        if (fallingBlocks[i].targetMs < cutoff) fallingBlocks.splice(i, 1);
+    }
+
+    ctx.restore();
 }
 
 // ── Boot ─────────────────────────────────────────────────────────────

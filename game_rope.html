@@ -1,0 +1,665 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Svihej — Virtuální lanko</title>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+    background: #04000c;
+    color: #e0d8f0;
+    font-family: system-ui, sans-serif;
+    height: 100vh;
+    overflow: hidden;
+}
+canvas#gc {
+    position: fixed;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+}
+video { display: none; }
+#modelStatus {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%,-50%);
+    font-size: 16px;
+    color: #9070b0;
+    pointer-events: none;
+}
+#ctrlBar {
+    position: fixed;
+    top: 0; left: 0; right: 0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 16px;
+    background: rgba(4,0,12,0.65);
+    backdrop-filter: blur(6px);
+    z-index: 10;
+}
+.cbtn {
+    background: rgba(40,0,70,0.7);
+    border: 1px solid rgba(130,0,220,0.4);
+    color: #a080d0;
+    padding: 5px 12px;
+    border-radius: 7px;
+    font-size: 13px;
+    font-weight: 700;
+    cursor: pointer;
+    white-space: nowrap;
+}
+.cbtn.active {
+    background: rgba(68,255,204,0.15);
+    border-color: rgba(68,255,204,0.6);
+    color: #44ffcc;
+}
+#vidSel {
+    background: rgba(40,0,70,0.7);
+    border: 1px solid rgba(130,0,220,0.4);
+    color: #d0b0ff;
+    padding: 5px 10px;
+    border-radius: 7px;
+    font-size: 13px;
+    cursor: pointer;
+    flex: 1;
+    display: none;
+}
+#btnPlay { display: none; }
+</style>
+</head>
+<body>
+
+<canvas id="gc"></canvas>
+<video id="vid" autoplay playsinline muted></video>
+<div id="modelStatus">Načítám model…</div>
+
+<div id="ctrlBar">
+    <button class="cbtn active" id="btnSrcCam">📹 Kamera</button>
+    <button class="cbtn" id="btnSrcVid">📂 Validační</button>
+    <button class="cbtn" id="btnFile">📁 Soubor…</button>
+    <input type="file" id="fileInput" accept="video/*" style="display:none">
+    <select id="vidSel">
+        <option value="/val/snozmo_18skoku.mp4">Snožmo – 18 skoků</option>
+        <option value="/val/Snozmo_rychle_18skoku.mp4">Snožmo rychle – 18 skoků</option>
+        <option value="/val/Cross_21crossu.mp4">Cross – 42 skoků</option>
+        <option value="/val/vysoka_kolena_25skoku.mp4">Vysoká kolena – 25 skoků</option>
+        <option value="/val/snozmo_rychle_27skoku.mp4">Snožmo rychle – 27 skoků</option>
+        <option value="/val/snozmo_34skoku.mp4">Snožmo – 34 skoků</option>
+        <option value="/val/Boxer step_50skoku .mp4">Boxer step – 50 skoků</option>
+        <option value="/val/stridacka_89skoku.mov">Střídačka – 89 skoků</option>
+        <option value="/val/mix_176skoku.MP4">Mix – 176 skoků</option>
+        <option value="/val/mix_237plus_skoku.mp4">Mix – 237+ skoků</option>
+    </select>
+    <button class="cbtn active" id="btnSkel">🦴 Kostra</button>
+    <button class="cbtn" id="btnPlay">▶ Play</button>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-core@4.9.0/dist/tf-core.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-converter@4.9.0/dist/tf-converter.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-webgl@4.9.0/dist/tf-backend-webgl.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/pose-detection@2.1.0/dist/pose-detection.min.js"></script>
+
+<script>
+// ── MoveNet keypoint indices ───────────────────────────────────────────
+const KP = {
+    leftShoulder:5, rightShoulder:6,
+    leftHip:11,     rightHip:12,
+    leftKnee:13,    rightKnee:14,
+    leftAnkle:15,   rightAnkle:16,
+    leftWrist:9,    rightWrist:10,
+};
+const SKEL = [
+    [5,6],[5,7],[6,8],[7,9],[8,10],[5,11],[6,12],[11,12],
+    [11,13],[12,14],[13,15],[14,16],
+];
+
+// ── JumpDetector ──────────────────────────────────────────────────────
+class JumpDetector {
+    TIME_MIN  = 100;
+    TIME_MAX  = 650;
+    MIN_SCORE = 0.25;
+    h = [];
+    d = [];
+    hipUpDrvInt   = 0;
+    hipDownDrvInt = 0;
+    KhipdiffTopLimitSet = false;
+    dbg = { KhipDrv:0, Khipdiff:0, timeUp:0, timeDown:0, ratio:0, reject:'', hipy:0, dhipyAvg:0, style:'' };
+
+    _sum(arr, key, n) {
+        const len = Math.min(arr.length, n);
+        let s = 0;
+        for (let i = 0; i < len; i++) s += arr[i][key];
+        return s;
+    }
+
+    reset() {
+        this.h = []; this.d = [];
+        this.hipUpDrvInt = 0; this.hipDownDrvInt = 0;
+        this.KhipdiffTopLimitSet = false;
+    }
+
+    detect(keypoints) {
+        const lh = keypoints[KP.leftHip],      rh = keypoints[KP.rightHip];
+        const ls = keypoints[KP.leftShoulder],  rs = keypoints[KP.rightShoulder];
+        const la = keypoints[KP.leftAnkle],     ra = keypoints[KP.rightAnkle];
+        const lk = keypoints[KP.leftKnee],      rk = keypoints[KP.rightKnee];
+
+        const minScore = Math.min(lh.score, rh.score, ls.score, rs.score);
+        if (minScore < this.MIN_SCORE) return false;
+
+        const p = 5;
+        const m = Math.max(ra.y, la.y) - (ls.y + rs.y) / 2;
+
+        const dL = lh.y - lk.y, dR = rh.y - rk.y;
+        if (dL > 0 && dR > 0 && Math.max(dL/Math.max(dR,1e-9), dR/Math.max(dL,1e-9)) > 1.1)
+            this.KhipdiffTopLimitSet = 2.2;
+
+        this.h.unshift({
+            hipy:0, dhipy:0, dhipyavg:0,
+            hiply:lh.y, hipry:rh.y, shly:ls.y, shry:rs.y,
+            knly:lk.y, knry:rk.y, anly:la.y, anry:ra.y,
+            time: Date.now(),
+        });
+        this.h[0].hipy     = (lh.y + rh.y + ls.y + rs.y) / 4;
+        this.h[0].dhipy    = this.h[1] ? this.h[0].hipy - this.h[1].hipy : 0;
+        this.h[0].dhipyavg = this._sum(this.h, 'dhipy', p) / p;
+        if (this.h.length >= 60) this.h.pop();
+
+        for (const e of this.d) e.frame++;
+
+        const cur  = this.h[0].dhipyavg;
+        const prev = this.h[1] ? this.h[1].dhipyavg : 0;
+        let jumped = false;
+
+        this.dbg.hipy     = +this.h[0].hipy.toFixed(3);
+        this.dbg.dhipyAvg = +cur.toFixed(4);
+        this.dbg.reject   = '';
+
+        if (Math.sign(cur) < Math.sign(prev)) {
+            if (this.d[0]) {
+                let pv=0, pf=0; this.hipDownDrvInt=0;
+                for (let e=1; e<=this.d[0].frame; e++) {
+                    if (this.h[e]) {
+                        if (this.h[e].dhipyavg > pv) { pv=this.h[e].dhipyavg; pf=e; }
+                        this.hipDownDrvInt += this.h[e].dhipyavg;
+                    }
+                }
+                this.d.unshift({type:3, frame:pf, value:pv});
+            }
+            this.d.unshift({type:0, frame:0, time:Date.now()});
+
+            let tUp=0, tDown=0;
+            if (this.d[4]) { tUp=this.d[2].time-this.d[4].time; tDown=this.d[0].time-this.d[2].time; }
+            const Kr   = tUp / Math.max(tDown, 1);
+            const tOk  = (tUp+tDown) > 2*this.TIME_MIN;
+            const tLim = (tUp+tDown) < 2*this.TIME_MAX;
+            const Kd   = Math.abs(this.hipDownDrvInt / (this.hipUpDrvInt||1));
+            const Klim = this.KhipdiffTopLimitSet || 2.5;
+            const Kdrv = (this.hipDownDrvInt-this.hipUpDrvInt) / ((tUp+tDown||1)*30*Math.max(m,1e-6)) * 1e7;
+
+            this.dbg.KhipDrv  = +Kdrv.toFixed(1);
+            this.dbg.Khipdiff = +Kd.toFixed(3);
+            this.dbg.timeUp   = tUp;
+            this.dbg.timeDown = tDown;
+            this.dbg.ratio    = +Kr.toFixed(2);
+
+            if (10<Kdrv && Kdrv<500 && tOk && tLim && 0.15<Kd && Kd<Klim && 0.35<Kr && Kr<2.0) {
+                this.KhipdiffTopLimitSet = false;
+                let abort=false, reason='';
+                const legL=(lk.y-lh.y)/Math.max(la.y-lh.y,0.001)*m*1e3;
+                const legR=(rk.y-rh.y)/Math.max(ra.y-rh.y,0.001)*m*1e3;
+                if (legL<10||legR<10)   { abort=true; reason='legs'; }
+                if (!abort && (lh.y>lk.y||lh.y>la.y||rh.y>rk.y||rh.y>ra.y)) { abort=true; reason='leg_above_hip'; }
+                if (!abort && (lh.y-ls.y>0.30||rh.y-rs.y>0.30)) { abort=true; reason='body_big'; }
+                if (!abort && (lh.y-ls.y<0.03||rh.y-rs.y<0.03)) { abort=true; reason='body_small'; }
+                if (!abort) {
+                    jumped = true;
+                    const ankleDiff = la.y - ra.y;
+                    const diffNorm  = Math.abs(ankleDiff) / Math.max(m, 0.01);
+                    this.dbg.style  = diffNorm < 0.05 ? 'snozmo'
+                                    : ankleDiff < 0   ? 'right'
+                                    : 'left';
+                }
+                else { this.dbg.reject = reason; }
+            } else {
+                if      (!(10<Kdrv&&Kdrv<500))   this.dbg.reject='KDrv';
+                else if (!tOk)                    this.dbg.reject='tShort';
+                else if (!tLim)                   this.dbg.reject='tLong';
+                else if (!(0.15<Kd&&Kd<Klim))    this.dbg.reject='Kdiff';
+                else                              this.dbg.reject='Kratio';
+            }
+        }
+
+        if (Math.sign(cur) > Math.sign(prev)) {
+            if (this.d[0]) {
+                let pv=0, pf=0; this.hipUpDrvInt=0;
+                for (let e=1; e<=this.d[0].frame; e++) {
+                    if (this.h[e]) {
+                        if (this.h[e].dhipyavg < pv) { pv=this.h[e].dhipyavg; pf=e; }
+                        this.hipUpDrvInt += this.h[e].dhipyavg;
+                    }
+                }
+                this.d.unshift({type:1, frame:pf, value:pv});
+            }
+            this.d.unshift({type:2, frame:0, time:Date.now()});
+        }
+        if (8 < this.d.length) this.d.pop();
+
+        return jumped;
+    }
+}
+
+// ── RopeController ────────────────────────────────────────────────────
+class RopeController {
+    theta       = Math.PI * 1.5;  // Start: lanko dole
+    revDuration = 700;             // ms na otočení (~85 ot/min)
+    lastJumpMs  = 0;
+    _lastFrame  = 0;
+
+    onJump(nowMs) {
+        if (this.lastJumpMs > 0) {
+            const dt = nowMs - this.lastJumpMs;
+            if (dt > 200 && dt < 3000) {
+                this.revDuration = this.revDuration * 0.4 + dt * 0.6;
+            }
+        }
+        this.lastJumpMs = nowMs;
+        // Detekce nastane při odrazu; za půl cyklu (vrchol výskoku) bude θ = 3π/2 (lanko dole)
+        this.theta = Math.PI * 0.5;
+    }
+
+    update(nowMs) {
+        const active = this.lastJumpMs > 0 && (nowMs - this.lastJumpMs) < this.revDuration * 1.5;
+        if (this._lastFrame > 0 && active) {
+            const dt = nowMs - this._lastFrame;
+            this.theta += (2 * Math.PI / this.revDuration) * dt;
+        }
+        this._lastFrame = nowMs;
+    }
+
+    get rpm() { return Math.round(60000 / this.revDuration); }
+}
+
+// ── DOM refs ──────────────────────────────────────────────────────────
+const gc       = document.getElementById('gc');
+const ctx      = gc.getContext('2d');
+const vid      = document.getElementById('vid');
+const statusEl = document.getElementById('modelStatus');
+
+// ── State ─────────────────────────────────────────────────────────────
+let poseDetector = null;
+let jd           = new JumpDetector();
+let rope         = new RopeController();
+let latestKps    = null;
+let poseRunning  = false;
+let videoRect    = { x:0, y:0, w:1, h:1 };
+let cameraStream = null;
+let isCamera      = true;
+let jumpCount     = 0;
+let maxAnkleY     = 0;  // tracked ground level (max screen-Y of ankles = lowest physical position)
+let showSkeleton  = true;
+
+// ── Camera / video source ─────────────────────────────────────────────
+function stopCamera() {
+    if (cameraStream) { cameraStream.getTracks().forEach(t => t.stop()); cameraStream = null; }
+}
+
+async function startCamera() {
+    stopCamera();
+    vid.src = '';
+    vid.srcObject = null;
+    try {
+        cameraStream = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } },
+            audio: false,
+        });
+        vid.srcObject = cameraStream;
+        await vid.play();
+        computeVideoRect();
+    } catch (err) {
+        statusEl.textContent = 'Chyba kamery: ' + err.message;
+    }
+}
+
+const vidSel  = document.getElementById('vidSel');
+const btnPlay = document.getElementById('btnPlay');
+
+function loadSelected() {
+    stopCamera();
+    vid.srcObject = null;
+    vid.src = vidSel.value;
+    vid.load();
+    vid.play().catch(() => {});
+    jd.reset();
+    rope = new RopeController();
+    jumpCount = 0;
+    maxAnkleY = 0;
+    btnPlay.textContent = '⏸ Pause';
+    btnPlay.classList.add('active');
+}
+
+document.getElementById('btnSrcVid').addEventListener('click', () => {
+    if (!isCamera) return;
+    isCamera = false;
+    document.getElementById('btnSrcVid').classList.add('active');
+    document.getElementById('btnSrcCam').classList.remove('active');
+    vidSel.style.display  = '';
+    btnPlay.style.display = '';
+    loadSelected();
+});
+
+document.getElementById('btnSrcCam').addEventListener('click', () => {
+    if (isCamera) return;
+    isCamera = true;
+    document.getElementById('btnSrcCam').classList.add('active');
+    document.getElementById('btnSrcVid').classList.remove('active');
+    vidSel.style.display  = 'none';
+    btnPlay.style.display = 'none';
+    jd.reset();
+    rope = new RopeController();
+    jumpCount = 0;
+    maxAnkleY = 0;
+    startCamera();
+});
+
+document.getElementById('btnSkel').addEventListener('click', () => {
+    showSkeleton = !showSkeleton;
+    document.getElementById('btnSkel').classList.toggle('active', showSkeleton);
+});
+
+vidSel.addEventListener('change', loadSelected);
+
+document.getElementById('btnFile').addEventListener('click', () => {
+    document.getElementById('fileInput').click();
+});
+
+document.getElementById('fileInput').addEventListener('change', (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    isCamera = false;
+    document.getElementById('btnSrcCam').classList.remove('active');
+    document.getElementById('btnSrcVid').classList.remove('active');
+    document.getElementById('btnFile').classList.add('active');
+    vidSel.style.display  = 'none';
+    btnPlay.style.display = '';
+    stopCamera();
+    vid.srcObject = null;
+    const url = URL.createObjectURL(file);
+    vid.src = url;
+    vid.load();
+    vid.play().catch(() => {});
+    jd.reset();
+    rope = new RopeController();
+    jumpCount = 0;
+    maxAnkleY = 0;
+    btnPlay.textContent = '⏸ Pause';
+    btnPlay.classList.add('active');
+});
+
+btnPlay.addEventListener('click', () => {
+    if (!vid.src) return;
+    if (vid.paused) {
+        vid.play();
+        btnPlay.textContent = '⏸ Pause';
+        btnPlay.classList.add('active');
+    } else {
+        vid.pause();
+        btnPlay.textContent = '▶ Play';
+        btnPlay.classList.remove('active');
+    }
+});
+
+vid.addEventListener('ended', () => {
+    btnPlay.textContent = '▶ Play';
+    btnPlay.classList.remove('active');
+});
+
+vid.addEventListener('loadedmetadata', () => computeVideoRect());
+
+function computeVideoRect() {
+    const W = gc.width  = gc.offsetWidth;
+    const H = gc.height = gc.offsetHeight;
+    const vW = vid.videoWidth  || W;
+    const vH = vid.videoHeight || H;
+    const scale = Math.min(W/vW, H/vH);
+    const dW = vW*scale, dH = vH*scale;
+    videoRect = { x:(W-dW)/2, y:(H-dH)/2, w:dW, h:dH };
+}
+window.addEventListener('resize', computeVideoRect);
+
+// ── TF.js / MoveNet ──────────────────────────────────────────────────
+async function initDetector() {
+    tf.ENV.set('WEBGL_PACK', false);
+    await tf.ready();
+    await tf.setBackend('webgl');
+    poseDetector = await poseDetection.createDetector(
+        poseDetection.SupportedModels.MoveNet,
+        {
+            modelType: poseDetection.movenet.modelType.SINGLEPOSE_LIGHTNING,
+            enableTracking: false,
+            modelUrl: '/app/svihej-camapp/v2025-july-mux/dist/tfjs-movenet/model.json',
+        }
+    );
+    statusEl.style.display = 'none';
+}
+
+// ── Pose loop ─────────────────────────────────────────────────────────
+async function poseLoop() {
+    requestAnimationFrame(poseLoop);
+    if (poseRunning || !poseDetector || vid.readyState < 2) return;
+    poseRunning = true;
+    try {
+        const poses = await poseDetector.estimatePoses(vid, { flipHorizontal: false });
+        if (poses.length > 0) {
+            const vW = vid.videoWidth || 640, vH = vid.videoHeight || 480;
+            latestKps = poses[0].keypoints.map(kp => ({ ...kp, x: kp.x/vW, y: kp.y/vH }));
+        }
+    } catch(_) {}
+    poseRunning = false;
+}
+
+// ── Skeleton drawing ──────────────────────────────────────────────────
+function drawSkeleton(kps, vr, alpha) {
+    const sx = kp => isCamera ? (1 - kp.x) * vr.w + vr.x : kp.x * vr.w + vr.x;
+    const sy = kp => kp.y * vr.h + vr.y;
+    ctx.save();
+    ctx.globalAlpha = alpha * 0.85;
+    ctx.lineCap = 'round';
+    for (const [a,b] of SKEL) {
+        const pa=kps[a], pb=kps[b];
+        if (!pa||!pb||pa.score<0.3||pb.score<0.3) continue;
+        ctx.strokeStyle = 'rgba(160,100,255,0.9)';
+        ctx.lineWidth   = Math.max(1.5, vr.w*0.003);
+        ctx.beginPath();
+        ctx.moveTo(sx(pa), sy(pa));
+        ctx.lineTo(sx(pb), sy(pb));
+        ctx.stroke();
+    }
+    for (let i=0; i<kps.length; i++) {
+        const kp=kps[i];
+        if (!kp||kp.score<0.3) continue;
+        ctx.beginPath();
+        ctx.arc(sx(kp), sy(kp), Math.max(3, vr.w*0.005), 0, Math.PI*2);
+        ctx.fillStyle = i<5 ? 'rgba(255,220,50,0.95)' : 'rgba(160,100,255,0.9)';
+        ctx.fill();
+    }
+    ctx.restore();
+}
+
+// ── Rope drawing ──────────────────────────────────────────────────────
+function getRopeParams(kps, vr) {
+    const sx = kp => isCamera ? (1 - kp.x) * vr.w + vr.x : kp.x * vr.w + vr.x;
+    const sy = kp => kp.y * vr.h + vr.y;
+
+    const lw = kps[KP.leftWrist],  rw = kps[KP.rightWrist];
+    if (!lw || !rw || lw.score < 0.3 || rw.score < 0.3) return null;
+
+    const lwx = sx(lw), lwy = sy(lw);
+    const rwx = sx(rw), rwy = sy(rw);
+    const midX = (lwx + rwx) / 2;
+    const midY = (lwy + rwy) / 2;
+
+    const ls = kps[KP.leftShoulder], rs = kps[KP.rightShoulder];
+    const la = kps[KP.leftAnkle],    ra = kps[KP.rightAnkle];
+    const shouldY = (sy(ls) + sy(rs)) / 2;
+    const ankleY  = (sy(la) + sy(ra)) / 2;
+    const bodyH   = Math.abs(ankleY - shouldY);
+
+    // Track max ankle Y = nejnižší fyzická poloha kotníků = úroveň podlahy
+    if (la.score > 0.2 && ra.score > 0.2) {
+        maxAnkleY = Math.max(maxAnkleY * 0.998, ankleY);
+    }
+    const floorY = maxAnkleY > 0 ? maxAnkleY : ankleY;
+    const ropeR  = Math.max(floorY - midY, bodyH * 0.3);
+
+    return { lwx, lwy, rwx, rwy, midX, midY, ropeR, floorY };
+}
+
+function drawRopeArc(p, theta, alpha, lineWidth, glow) {
+    const sinT = Math.sin(theta);
+
+    // Perspektivní korekce: blíže (vpředu) = větší amplituda + tlustší čára
+    const perspScale  = 1 + 0.2 * Math.cos(theta);
+    const perspBellyY = p.midY - p.ropeR * sinT * perspScale;
+
+    // squish: 0 = round arc, 1 = lanko splasčené na podlahu
+    const rawSquish = Math.max(0, -sinT - 0.3) / 0.7;
+    const squish    = rawSquish * rawSquish;
+
+    // cubic bezier midpoint = 0.25*midY + 0.75*cpY; pro midpoint = floorY: cpY = (4*floorY−midY)/3
+    const quadCpY   = 2 * perspBellyY - p.midY;
+    const squishCpY = (4 * p.floorY - p.midY) / 3;
+    const cp1x = p.midX + (p.lwx - p.midX) * squish;
+    const cp2x = p.midX + (p.rwx - p.midX) * squish;
+    const cpY  = quadCpY * (1 - squish) + squishCpY * squish;
+
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.strokeStyle = '#44ffcc';
+    ctx.lineWidth   = lineWidth * perspScale;
+    ctx.lineCap     = 'round';
+    if (glow) { ctx.shadowColor = '#44ffcc'; ctx.shadowBlur = 18; }
+    ctx.beginPath();
+    ctx.moveTo(p.lwx, p.lwy);
+    ctx.bezierCurveTo(cp1x, cpY, cp2x, cpY, p.rwx, p.rwy);
+    ctx.stroke();
+    ctx.restore();
+}
+
+function drawRopeHandles(p, theta) {
+    const cosT  = Math.cos(theta);
+    const front = cosT > 0;
+    ctx.save();
+    ctx.lineCap     = 'round';
+    ctx.strokeStyle = '#44ffcc';
+    ctx.lineWidth   = 6 + cosT * 2;
+    if (front) { ctx.shadowColor = '#44ffcc'; ctx.shadowBlur = 10; }
+    for (const [hx, hy] of [[p.lwx, p.lwy], [p.rwx, p.rwy]]) {
+        ctx.globalAlpha = front ? 0.95 : 0.35;
+        ctx.beginPath();
+        ctx.moveTo(hx, hy - 14);
+        ctx.lineTo(hx, hy + 6);
+        ctx.stroke();
+    }
+    ctx.restore();
+}
+
+function drawRopeShadow(p, theta) {
+    const sinT  = Math.sin(theta);
+    const alpha = Math.max(0, sinT * 0.18);
+    if (alpha <= 0) return;
+    const shadowBulge = Math.abs(p.rwx - p.lwx) * 0.06 * Math.abs(Math.cos(theta));
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.strokeStyle = '#44ffcc';
+    ctx.lineWidth   = 2;
+    ctx.lineCap     = 'round';
+    ctx.shadowColor = '#44ffcc';
+    ctx.shadowBlur  = 6;
+    ctx.beginPath();
+    ctx.moveTo(p.lwx, p.floorY);
+    ctx.quadraticCurveTo(p.midX, p.floorY + shadowBulge, p.rwx, p.floorY);
+    ctx.stroke();
+    ctx.restore();
+}
+
+// ── Render loop ───────────────────────────────────────────────────────
+function renderLoop() {
+    requestAnimationFrame(renderLoop);
+
+    const now = performance.now();
+    const W   = gc.offsetWidth, H = gc.offsetHeight;
+    if (gc.width !== W || gc.height !== H) { gc.width=W; gc.height=H; computeVideoRect(); }
+
+    rope.update(now);
+
+    // Background + camera
+    ctx.fillStyle = '#04000c';
+    ctx.fillRect(0, 0, W, H);
+    if (vid.readyState >= 2) {
+        ctx.save();
+        if (isCamera) {
+            ctx.scale(-1, 1);
+            ctx.drawImage(vid, -(videoRect.x + videoRect.w), videoRect.y, videoRect.w, videoRect.h);
+        } else {
+            ctx.drawImage(vid, videoRect.x, videoRect.y, videoRect.w, videoRect.h);
+        }
+        ctx.restore();
+    }
+
+    if (latestKps) {
+        const jumped = jd.detect(latestKps);
+        if (jumped) {
+            rope.onJump(now);
+            jumpCount++;
+        }
+
+        const p     = getRopeParams(latestKps, videoRect);
+        const depth = p ? Math.cos(rope.theta) : 0;
+
+        // Stín na podlaze (nejníže v Z-pořadí)
+        if (p) drawRopeShadow(p, rope.theta);
+
+        // Pass 1: lanko za tělem — jen přechodová zóna depth −0.3..0, plynulý fade-out
+        if (p && depth < 0 && depth > -0.3) {
+            drawRopeArc(p, rope.theta, 0.22 * (depth + 0.3) / 0.3, 3, false);
+        }
+
+        if (showSkeleton) drawSkeleton(latestKps, videoRect, 0.55);
+
+        // Pass 2: lanko před tělem (bright)
+        if (p && depth > 0) {
+            drawRopeArc(p, rope.theta, 0.4 + 0.5 * depth, 5, true);
+        }
+        if (p) drawRopeHandles(p, rope.theta);
+
+    }
+
+    // HUD
+    ctx.save();
+    ctx.font         = 'bold 18px system-ui';
+    ctx.fillStyle    = 'rgba(68,255,204,0.75)';
+    ctx.textBaseline = 'top';
+    ctx.textAlign    = 'left';
+    ctx.fillText(`${jumpCount} skoků`, 20, 52);
+    if (rope.lastJumpMs > 0) {
+        ctx.textAlign = 'right';
+        ctx.fillText(`${rope.rpm} ot/min`, W - 20, 52);
+    }
+    ctx.restore();
+}
+
+// ── Boot ─────────────────────────────────────────────────────────────
+(async () => {
+    renderLoop();
+    await startCamera();
+    await initDetector();
+    poseLoop();
+})();
+</script>
+</body>
+</html>
