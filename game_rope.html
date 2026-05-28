@@ -302,6 +302,10 @@ let isCamera      = true;
 let jumpCount     = 0;
 let maxAnkleY     = 0;  // tracked ground level (max screen-Y of ankles = lowest physical position)
 let showSkeleton  = true;
+let errorFlashMs       = 0;     // timestamp poslední chyby (0 = žádná)
+let ropeAtBottom       = false; // guard: max 1 chyba na průchod spodem
+let lastBottomJumpCount = 0;    // jumpCount při posledním průchodu lankem spodem
+let ropeColor     = '#44ffcc';
 
 // ── Camera / video source ─────────────────────────────────────────────
 function stopCamera() {
@@ -338,6 +342,7 @@ function loadSelected() {
     rope = new RopeController();
     jumpCount = 0;
     maxAnkleY = 0;
+    lastBottomJumpCount = 0;
     btnPlay.textContent = '⏸ Pause';
     btnPlay.classList.add('active');
 }
@@ -363,6 +368,7 @@ document.getElementById('btnSrcCam').addEventListener('click', () => {
     rope = new RopeController();
     jumpCount = 0;
     maxAnkleY = 0;
+    lastBottomJumpCount = 0;
     startCamera();
 });
 
@@ -396,6 +402,7 @@ document.getElementById('fileInput').addEventListener('change', (e) => {
     rope = new RopeController();
     jumpCount = 0;
     maxAnkleY = 0;
+    lastBottomJumpCount = 0;
     btnPlay.textContent = '⏸ Pause';
     btnPlay.classList.add('active');
 });
@@ -516,7 +523,7 @@ function getRopeParams(kps, vr) {
     const floorY = maxAnkleY > 0 ? maxAnkleY : ankleY;
     const ropeR  = Math.max(floorY - midY, bodyH * 0.3);
 
-    return { lwx, lwy, rwx, rwy, midX, midY, ropeR, floorY };
+    return { lwx, lwy, rwx, rwy, midX, midY, ropeR, floorY, ankleY, bodyH };
 }
 
 function drawRopeArc(p, theta, alpha, lineWidth, glow) {
@@ -539,10 +546,10 @@ function drawRopeArc(p, theta, alpha, lineWidth, glow) {
 
     ctx.save();
     ctx.globalAlpha = alpha;
-    ctx.strokeStyle = '#44ffcc';
+    ctx.strokeStyle = ropeColor;
     ctx.lineWidth   = lineWidth * perspScale;
     ctx.lineCap     = 'round';
-    if (glow) { ctx.shadowColor = '#44ffcc'; ctx.shadowBlur = 18; }
+    if (glow) { ctx.shadowColor = ropeColor; ctx.shadowBlur = 18; }
     ctx.beginPath();
     ctx.moveTo(p.lwx, p.lwy);
     ctx.bezierCurveTo(cp1x, cpY, cp2x, cpY, p.rwx, p.rwy);
@@ -555,9 +562,9 @@ function drawRopeHandles(p, theta) {
     const front = cosT > 0;
     ctx.save();
     ctx.lineCap     = 'round';
-    ctx.strokeStyle = '#44ffcc';
+    ctx.strokeStyle = ropeColor;
     ctx.lineWidth   = 6 + cosT * 2;
-    if (front) { ctx.shadowColor = '#44ffcc'; ctx.shadowBlur = 10; }
+    if (front) { ctx.shadowColor = ropeColor; ctx.shadowBlur = 10; }
     for (const [hx, hy] of [[p.lwx, p.lwy], [p.rwx, p.rwy]]) {
         ctx.globalAlpha = front ? 0.95 : 0.35;
         ctx.beginPath();
@@ -575,10 +582,10 @@ function drawRopeShadow(p, theta) {
     const shadowBulge = Math.abs(p.rwx - p.lwx) * 0.06 * Math.abs(Math.cos(theta));
     ctx.save();
     ctx.globalAlpha = alpha;
-    ctx.strokeStyle = '#44ffcc';
+    ctx.strokeStyle = ropeColor;
     ctx.lineWidth   = 2;
     ctx.lineCap     = 'round';
-    ctx.shadowColor = '#44ffcc';
+    ctx.shadowColor = ropeColor;
     ctx.shadowBlur  = 6;
     ctx.beginPath();
     ctx.moveTo(p.lwx, p.floorY);
@@ -620,6 +627,22 @@ function renderLoop() {
 
         const p     = getRopeParams(latestKps, videoRect);
         const depth = p ? Math.cos(rope.theta) : 0;
+
+        // Detekce chyby: lanko dole a od posledního průchodu spodem nepřišel žádný skok
+        const atBottom   = Math.sin(rope.theta) < -0.7;
+        const ropeActive = rope.lastJumpMs > 0 && (now - rope.lastJumpMs) < rope.revDuration * 1.5;
+        if (atBottom && !ropeAtBottom) {
+            ropeAtBottom = true;
+            if (ropeActive && jumpCount <= lastBottomJumpCount) errorFlashMs = now;
+            lastBottomJumpCount = jumpCount;
+        }
+        if (!atBottom) ropeAtBottom = false;
+
+        // Barva lanka: teal → červená → teal (flash 500 ms)
+        const errT = errorFlashMs > 0 ? Math.max(0, 1 - (now - errorFlashMs) / 500) : 0;
+        ropeColor = errT > 0
+            ? `rgb(${Math.round(68+187*errT)},${Math.round(255-221*errT)},${Math.round(204-136*errT)})`
+            : '#44ffcc';
 
         // Stín na podlaze (nejníže v Z-pořadí)
         if (p) drawRopeShadow(p, rope.theta);

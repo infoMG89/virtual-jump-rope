@@ -78,6 +78,9 @@ class JumpDetector:
         self.reject_log   = []        # list of (frame_ms, reason, KhipDrv, Khipdiff, Kratio)
         self.rejects      = defaultdict(int)
         self.style_log    = []        # list of (frame_ms, diff_norm, ankle_diff)
+        self.max_ankle_y  = 0.0       # running floor level
+        self.elevation_log = []       # (frame_ms, elev_norm) — ankle elevation at apex of each jump
+        self.last_jump_ms  = -9999.0  # timestamp of last confirmed push-off
 
         self.TIME_MIN    = p['TIME_MIN']
         self.TIME_MAX    = p['TIME_MAX']
@@ -110,6 +113,9 @@ class JumpDetector:
         ls = lm['ls'];  rs = lm['rs']
         la = lm['la'];  ra = lm['ra']
         lk = lm['lk'];  rk = lm['rk']
+
+        ankle_y = (la['y'] + ra['y']) / 2
+        self.max_ankle_y = max(self.max_ankle_y * 0.998, ankle_y)
 
         win = self.win
         m = max(ra['y'], la['y']) - (ls['y'] + rs['y']) / 2
@@ -198,6 +204,7 @@ class JumpDetector:
                     ankle_diff = la['y'] - ra['y']
                     diff_norm  = abs(ankle_diff) / max(m, 0.01)
                     self.style_log.append((frame_ms, diff_norm, ankle_diff))
+                    self.last_jump_ms = frame_ms
                 else:
                     self.rejects[reason] += 1
                     self.reject_log.append((frame_ms, reason, K_drv, K_hipdiff, K_ratio))
@@ -221,6 +228,11 @@ class JumpDetector:
                         self.hipUpDrvInt += v
                 self.d.insert(0, {'type': 1, 'frame': pf, 'value': pv})
             self.d.insert(0, {'type': 2, 'frame': 0, 'time': frame_ms})
+            # Log ankle elevation at apex for confirmed jumps
+            if (frame_ms - self.last_jump_ms) < 1500:
+                body_h = abs(ankle_y - (ls['y'] + rs['y']) / 2)
+                elev   = (self.max_ankle_y - ankle_y) / max(body_h, 0.01)
+                self.elevation_log.append((frame_ms, elev))
 
         # Trim
         if len(self.d) > 8:
@@ -322,6 +334,15 @@ def run(params=None, filter_name=None, verbose=False):
         if det.style_log:
             vals = [f"{dn:.3f}" for _, dn, _ in det.style_log]
             print(f"     diffNorm: {' '.join(vals)}")
+
+        # elevation log (for error detection threshold calibration)
+        if det.elevation_log:
+            evals = [f"{e:.3f}" for _, e in det.elevation_log]
+            print(f"     elevation: {' '.join(evals)}")
+            emin  = min(e for _, e in det.elevation_log)
+            emax  = max(e for _, e in det.elevation_log)
+            emean = sum(e for _, e in det.elevation_log) / len(det.elevation_log)
+            print(f"     elev min={emin:.3f}  max={emax:.3f}  mean={emean:.3f}")
 
         n_total += 1
         if passed: n_pass += 1
